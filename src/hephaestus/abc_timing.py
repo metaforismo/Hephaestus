@@ -34,9 +34,7 @@ _STIME_PATTERN = re.compile(
     r"Delay\s*=\s*(?P<delay>[0-9.eE+-]+)\s*(?P<delay_unit>[A-Za-z]+)",
     re.IGNORECASE,
 )
-_STAT_AREA_PATTERN = re.compile(
-    r"Chip area for module '\\?[^']+':\s*([0-9.eE+-]+)"
-)
+_STAT_AREA_PATTERN = re.compile(r"Chip area for module '\\?[^']+':\s*([0-9.eE+-]+)")
 _LIBRARY_SUMMARY_PATTERN = re.compile(
     r'ABC:\s+Library\s+"(?P<name>[^"]+)".*?has\s+'
     r"(?P<usable>[0-9]+)\s+cells\s*\((?P<skipped>[0-9]+)\s+skipped:",
@@ -53,9 +51,7 @@ def _load_json(path: Path) -> Any:
 
 def _validate_module_name(module: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", module) is None:
-        raise AbcTimingError(
-            f"unsafe or unsupported SystemVerilog module name: {module!r}"
-        )
+        raise AbcTimingError(f"unsafe or unsupported SystemVerilog module name: {module!r}")
     return module
 
 
@@ -68,9 +64,7 @@ def _resolve_bundle_artifact(bundle_dir: Path, raw_path: str) -> Path:
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise AbcTimingError(
-            f"bundle artifact escapes its root: {raw_path!r}"
-        ) from exc
+        raise AbcTimingError(f"bundle artifact escapes its root: {raw_path!r}") from exc
     if not resolved.is_file():
         raise AbcTimingError(f"bundle artifact does not exist: {resolved}")
     return resolved
@@ -140,26 +134,18 @@ def _load_area_delay_config(path: Path) -> dict[str, Any]:
         raise AbcTimingError("config.targets_picoseconds must be a non-empty list")
 
     _required_string(technology, "technology_id", "config.technology")
-    digest = _required_string(
-        technology, "liberty_sha256", "config.technology"
-    )
+    digest = _required_string(technology, "liberty_sha256", "config.technology")
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-        raise AbcTimingError(
-            "config.technology.liberty_sha256 must be a lowercase SHA-256 digest"
-        )
+        raise AbcTimingError("config.technology.liberty_sha256 must be a lowercase SHA-256 digest")
     _required_string(technology, "liberty_name", "config.technology")
 
     _required_string(io, "driving_cell", "config.io")
     load = _required_number(io, "output_load_femtofarads", "config.io")
     if load < 0:
-        raise AbcTimingError(
-            "config.io.output_load_femtofarads must be non-negative"
-        )
+        raise AbcTimingError("config.io.output_load_femtofarads must be non-negative")
 
     if targets[0] is not None or targets.count(None) != 1:
-        raise AbcTimingError(
-            "config.targets_picoseconds must start with exactly one null target"
-        )
+        raise AbcTimingError("config.targets_picoseconds must start with exactly one null target")
     numeric_targets: list[int] = []
     for target in targets[1:]:
         if type(target) is not int or target <= 0:
@@ -168,9 +154,7 @@ def _load_area_delay_config(path: Path) -> dict[str, Any]:
             )
         numeric_targets.append(target)
     if numeric_targets != sorted(set(numeric_targets)):
-        raise AbcTimingError(
-            "configured ABC delay targets must be unique and strictly increasing"
-        )
+        raise AbcTimingError("configured ABC delay targets must be unique and strictly increasing")
 
     _required_string(flow, "mapper", "config.flow")
     _required_string(flow, "timing_model", "config.flow")
@@ -192,9 +176,7 @@ def _load_technology_config(path: Path) -> dict[str, Any]:
     _required_string(library, "name", "technology.library")
     digest = _required_string(library, "sha256", "technology.library")
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-        raise AbcTimingError(
-            "technology.library.sha256 must be a lowercase SHA-256 digest"
-        )
+        raise AbcTimingError("technology.library.sha256 must be a lowercase SHA-256 digest")
     byte_count = library.get("bytes")
     if type(byte_count) is not int or byte_count <= 0:
         raise AbcTimingError("technology.library.bytes must be a positive integer")
@@ -251,9 +233,7 @@ def _inspect_liberty(
         areas[name] = area
         flags[name] = {
             "has_function": re.search(r"\bfunction\s*:", body) is not None,
-            "dont_use": re.search(
-                r"\bdont_use\s*:\s*(?:true|1)\s*;", body, re.IGNORECASE
-            )
+            "dont_use": re.search(r"\bdont_use\s*:\s*(?:true|1)\s*;", body, re.IGNORECASE)
             is not None,
         }
 
@@ -315,38 +295,23 @@ def _verify_inputs(
     }
     for label, (expected, actual) in comparisons.items():
         if expected != actual:
-            raise AbcTimingError(
-                f"{label} mismatch: expected {expected!r}, got {actual!r}"
-            )
+            raise AbcTimingError(f"{label} mismatch: expected {expected!r}, got {actual!r}")
 
     driver = evidence_config["io"]["driving_cell"]
     if driver not in cell_flags:
-        raise AbcTimingError(
-            f"configured ABC driving cell {driver!r} is absent from the Liberty"
-        )
+        raise AbcTimingError(f"configured ABC driving cell {driver!r} is absent from the Liberty")
     if cell_flags[driver]["dont_use"]:
-        raise AbcTimingError(
-            f"configured ABC driving cell {driver!r} is marked dont_use"
-        )
+        raise AbcTimingError(f"configured ABC driving cell {driver!r} is marked dont_use")
     if not cell_flags[driver]["has_function"]:
-        raise AbcTimingError(
-            f"configured ABC driving cell {driver!r} has no Boolean function"
-        )
+        raise AbcTimingError(f"configured ABC driving cell {driver!r} has no Boolean function")
 
 
 def _target_label(target_picoseconds: int | None) -> str:
-    return (
-        "unconstrained"
-        if target_picoseconds is None
-        else f"d{target_picoseconds}ps"
-    )
+    return "unconstrained" if target_picoseconds is None else f"d{target_picoseconds}ps"
 
 
 def _constraints_text(driver_cell: str, output_load_femtofarads: float) -> str:
-    return (
-        f"set_driving_cell {driver_cell}\n"
-        f"set_load {output_load_femtofarads:.12g}\n"
-    )
+    return f"set_driving_cell {driver_cell}\nset_load {output_load_femtofarads:.12g}\n"
 
 
 def _build_script(
@@ -374,10 +339,7 @@ def _build_script(
         "opt",
         "techmap",
         "opt",
-        (
-            f"abc -liberty {liberty_path} -constr {constraints_path}"
-            f"{target}"
-        ),
+        (f"abc -liberty {liberty_path} -constr {constraints_path}{target}"),
         "clean -purge",
         "check -assert",
         f"tee -o mapped.stat.txt stat -liberty {liberty_path}",
@@ -390,9 +352,7 @@ def _build_script(
 def _parse_stime(output: str) -> dict[str, Any]:
     matches = list(_STIME_PATTERN.finditer(output))
     if len(matches) != 1:
-        raise AbcTimingError(
-            f"expected exactly one ABC stime record, found {len(matches)}"
-        )
+        raise AbcTimingError(f"expected exactly one ABC stime record, found {len(matches)}")
     match = matches[0]
     record = {
         "wire_load": match.group("wire_load"),
@@ -431,9 +391,7 @@ def _parse_stat_area(stat_text: str, module: str) -> float:
 def _library_summary(output: str) -> dict[str, Any]:
     matches = list(_LIBRARY_SUMMARY_PATTERN.finditer(output))
     if len(matches) != 1:
-        raise AbcTimingError(
-            f"expected exactly one ABC library summary, found {len(matches)}"
-        )
+        raise AbcTimingError(f"expected exactly one ABC library summary, found {len(matches)}")
     match = matches[0]
     return {
         "name": match.group("name"),
@@ -469,9 +427,7 @@ def _run_mapping(
     top = _validate_module_name(module)
     run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_rtl, run_dir / "input.sv")
-    (run_dir / "map.ys").write_text(
-        _build_script(top, target_picoseconds), encoding="utf-8"
-    )
+    (run_dir / "map.ys").write_text(_build_script(top, target_picoseconds), encoding="utf-8")
 
     completed = subprocess.run(
         [executable, "-s", "map.ys"],
@@ -481,16 +437,10 @@ def _run_mapping(
         text=True,
         timeout=timeout_seconds,
     )
-    (run_dir / "yosys.stdout.txt").write_text(
-        completed.stdout, encoding="utf-8"
-    )
-    (run_dir / "yosys.stderr.txt").write_text(
-        completed.stderr, encoding="utf-8"
-    )
+    (run_dir / "yosys.stdout.txt").write_text(completed.stdout, encoding="utf-8")
+    (run_dir / "yosys.stderr.txt").write_text(completed.stderr, encoding="utf-8")
     if completed.returncode != 0:
-        raise AbcTimingError(
-            f"Yosys/ABC failed for run {run_dir}; inspect preserved logs"
-        )
+        raise AbcTimingError(f"Yosys/ABC failed for run {run_dir}; inspect preserved logs")
 
     artifacts = _required_run_artifacts(run_dir)
     missing = [label for label, path in artifacts.items() if not path.is_file()]
@@ -502,13 +452,9 @@ def _run_mapping(
     netlist = _load_json(artifacts["mapped_netlist"])
     metrics = _netlist_metrics(netlist, top)
     if metrics["input_bits"] != expected_input_bits:
-        raise AbcTimingError(
-            f"mapped input width differs from the contract for {run_dir}"
-        )
+        raise AbcTimingError(f"mapped input width differs from the contract for {run_dir}")
     if metrics["output_bits"] != expected_output_bits:
-        raise AbcTimingError(
-            f"mapped output width differs from the contract for {run_dir}"
-        )
+        raise AbcTimingError(f"mapped output width differs from the contract for {run_dir}")
     if metrics["cell_count"] <= 0:
         raise AbcTimingError(f"ABC mapped {run_dir} to no cells")
 
@@ -527,9 +473,7 @@ def _run_mapping(
     histogram_area = sum(cell_areas[cell] * count for cell, count in histogram.items())
 
     if stime["gate_count"] != metrics["cell_count"]:
-        raise AbcTimingError(
-            f"ABC gate count and mapped netlist cell count differ for {run_dir}"
-        )
+        raise AbcTimingError(f"ABC gate count and mapped netlist cell count differ for {run_dir}")
     if not math.isclose(stime["library_area"], stat_area, abs_tol=0.01):
         raise AbcTimingError(
             f"ABC stime area and Yosys stat area differ for {run_dir}: "
@@ -542,16 +486,8 @@ def _run_mapping(
         )
 
     delay_ps = float(stime["delay"])
-    target_met = (
-        None
-        if target_picoseconds is None
-        else delay_ps <= float(target_picoseconds)
-    )
-    target_margin = (
-        None
-        if target_picoseconds is None
-        else float(target_picoseconds) - delay_ps
-    )
+    target_met = None if target_picoseconds is None else delay_ps <= float(target_picoseconds)
+    target_margin = None if target_picoseconds is None else float(target_picoseconds) - delay_ps
     return {
         "target_picoseconds": target_picoseconds,
         "target_met": target_met,
@@ -703,24 +639,16 @@ def _comparisons_to_shared(backends: dict[str, Any]) -> dict[str, Any]:
             adp = float(peer["area_delay_product"])
             peers[backend_name] = {
                 "shared_dag_area_difference": area - shared_area,
-                "shared_dag_area_reduction_percent": 100.0
-                * (area - shared_area)
-                / area,
+                "shared_dag_area_reduction_percent": 100.0 * (area - shared_area) / area,
                 "shared_dag_delay_difference_picoseconds": delay - shared_delay,
-                "shared_dag_delay_reduction_percent": 100.0
-                * (delay - shared_delay)
-                / delay,
-                "shared_dag_area_delay_product_reduction_percent": 100.0
-                * (adp - shared_adp)
-                / adp,
+                "shared_dag_delay_reduction_percent": 100.0 * (delay - shared_delay) / delay,
+                "shared_dag_area_delay_product_reduction_percent": 100.0 * (adp - shared_adp) / adp,
             }
         comparisons[label] = peers
     return comparisons
 
 
-def _artifact_entries(
-    artifacts: dict[str, Path], output_dir: Path
-) -> dict[str, dict[str, str]]:
+def _artifact_entries(artifacts: dict[str, Path], output_dir: Path) -> dict[str, dict[str, str]]:
     return {
         label: {
             "path": path.relative_to(output_dir).as_posix(),
@@ -744,16 +672,8 @@ def _write_summary(path: Path, manifest: dict[str, Any]) -> None:
     ]
     for backend_name, backend in sorted(manifest["backends"].items()):
         for label, run in backend["runs"].items():
-            target = (
-                "none"
-                if run["target_picoseconds"] is None
-                else str(run["target_picoseconds"])
-            )
-            met = (
-                "n/a"
-                if run["target_met"] is None
-                else ("yes" if run["target_met"] else "no")
-            )
+            target = "none" if run["target_picoseconds"] is None else str(run["target_picoseconds"])
+            met = "n/a" if run["target_met"] is None else ("yes" if run["target_met"] else "no")
             lines.append(
                 f"| `{backend_name}` | `{label}` | {target} | "
                 f"{run['metrics']['cell_count']} | {run['library_area']:.4f} | "
@@ -796,18 +716,12 @@ def build_abc_area_delay_evidence(
 
     matched_manifest_path = bundle / "matched_manifest.json"
     if not matched_manifest_path.is_file():
-        raise AbcTimingError(
-            f"matched bundle is missing {matched_manifest_path.name}"
-        )
+        raise AbcTimingError(f"matched bundle is missing {matched_manifest_path.name}")
     matched_manifest = _load_json(matched_manifest_path)
     if matched_manifest.get("schema") != "hephaestus.matched-baselines.v1":
         raise AbcTimingError("unsupported matched-baseline manifest schema")
-    if not matched_manifest.get("claims", {}).get(
-        "matched_integer_contract_verified"
-    ):
-        raise AbcTimingError(
-            "matched integer contract must be verified before ABC timing evidence"
-        )
+    if not matched_manifest.get("claims", {}).get("matched_integer_contract_verified"):
+        raise AbcTimingError("matched integer contract must be verified before ABC timing evidence")
 
     configuration = _load_area_delay_config(configuration_path)
     technology = _load_technology_config(technology_path)
@@ -853,9 +767,7 @@ def build_abc_area_delay_evidence(
         raise AbcTimingError("matched manifest contract is malformed")
 
     input_bits = contract.get("input_count", 0) * contract.get("input_width", 0)
-    output_bits = contract.get("output_count", 0) * contract.get(
-        "accumulator_width", 0
-    )
+    output_bits = contract.get("output_count", 0) * contract.get("accumulator_width", 0)
     if type(input_bits) is not int or input_bits <= 0:
         raise AbcTimingError("matched input bus width is invalid")
     if type(output_bits) is not int or output_bits <= 0:
@@ -869,15 +781,11 @@ def build_abc_area_delay_evidence(
     for backend_name in sorted(backend_specs):
         specification = backend_specs[backend_name]
         if not isinstance(specification, dict):
-            raise AbcTimingError(
-                f"backend specification {backend_name!r} is malformed"
-            )
+            raise AbcTimingError(f"backend specification {backend_name!r} is malformed")
         module = _validate_module_name(str(specification.get("module", "")))
         rtl_value = specification.get("rtl")
         if not isinstance(rtl_value, str) or not rtl_value:
-            raise AbcTimingError(
-                f"backend {backend_name!r} does not identify its RTL"
-            )
+            raise AbcTimingError(f"backend {backend_name!r} does not identify its RTL")
         source_rtl = _resolve_bundle_artifact(bundle, rtl_value)
         hash_label = _EXPECTED_BACKEND_HASH_LABELS.get(backend_name)
         if hash_label is not None:
@@ -921,18 +829,10 @@ def build_abc_area_delay_evidence(
                     timeout_seconds=timeout_seconds,
                     first_run=result,
                 )
-            runs[label] = {
-                key: value
-                for key, value in result.items()
-                if key != "artifacts"
-            }
+            runs[label] = {key: value for key, value in result.items() if key != "artifacts"}
             runs[label]["repeatability"] = repeatability
-            runs[label]["artifacts"] = _artifact_entries(
-                result["artifacts"], output
-            )
-            runs[label]["repeatability_artifacts"] = _artifact_entries(
-                repeated_artifacts, output
-            )
+            runs[label]["artifacts"] = _artifact_entries(result["artifacts"], output)
+            runs[label]["repeatability_artifacts"] = _artifact_entries(repeated_artifacts, output)
 
         backend_evidence[backend_name] = {
             "module": module,
@@ -940,9 +840,7 @@ def build_abc_area_delay_evidence(
             "runs": runs,
             "pareto_labels": _pareto_labels(runs),
             "minimum_area_label": _minimum_label(runs, "library_area"),
-            "minimum_delay_label": _minimum_label(
-                runs, "critical_path_delay_picoseconds"
-            ),
+            "minimum_delay_label": _minimum_label(runs, "critical_path_delay_picoseconds"),
         }
 
     manifest = {
@@ -982,17 +880,13 @@ def build_abc_area_delay_evidence(
             "version": version,
         },
         "flow": {
-            "script_template": _build_script("TOP", None).replace(
-                "-top TOP", "-top <module>"
-            ),
+            "script_template": _build_script("TOP", None).replace("-top TOP", "-top <module>"),
             "targeted_script_template": _build_script("TOP", 1234)
             .replace("-top TOP", "-top <module>")
             .replace("-D 1234", "-D <picoseconds>"),
             "abc_terminal_report": "stime -p",
             "input_driver_model": configuration["io"]["driving_cell"],
-            "output_load_femtofarads": configuration["io"][
-                "output_load_femtofarads"
-            ],
+            "output_load_femtofarads": configuration["io"]["output_load_femtofarads"],
             "clock_constraint": None,
             "placement": False,
             "routing": False,
@@ -1031,9 +925,7 @@ def build_abc_area_delay_evidence(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Sweep technology-aware ABC area-delay points for verified matched RTL."
-        )
+        description=("Sweep technology-aware ABC area-delay points for verified matched RTL.")
     )
     parser.add_argument("matched_bundle", type=Path)
     parser.add_argument("--technology", type=Path, required=True)

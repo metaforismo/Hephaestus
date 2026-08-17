@@ -73,8 +73,7 @@ def _write_config(path: Path, digest: str) -> None:
 
 def _fake_yosys(path: Path, *, include_delay: bool = True) -> None:
     delay_line = (
-        'print(\'ABC: WireLoad = "none"  Gates = 1  Cap = 1.0 ff  '
-        "Area = 1.00  Delay = 2.50 ps\')"
+        "print('ABC: WireLoad = \"none\"  Gates = 1  Cap = 1.0 ff  Area = 1.00  Delay = 2.50 ps')"
         if include_delay
         else ""
     )
@@ -125,7 +124,7 @@ print('ABC: Library "test_lib" from "test.lib" has 2 cells (0 skipped: 0 seq;)')
 def test_parse_stime_extracts_declared_units() -> None:
     output = (
         'ABC: WireLoad = "none"  Gates = 497 (2.6 %)  Cap = 8.5 ff '
-        'Area = 5439.57 (94.2 %)  Delay = 2029.49 ps (17.3 %)'
+        "Area = 5439.57 (94.2 %)  Delay = 2029.49 ps (17.3 %)"
     )
     parsed = _parse_stime(output)
     assert parsed["gate_count"] == 497
