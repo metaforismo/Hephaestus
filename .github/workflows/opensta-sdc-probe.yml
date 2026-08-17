@@ -1,0 +1,385 @@
+name: OpenSTA SDC timing probe
+
+on:
+  push:
+    branches:
+      - research/opensta-sdc-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENSTA_COMMIT: 2b751f0e8196b05ef4ed8246b7e27c63c967ec6d
+      CUDD_URL: https://raw.githubusercontent.com/davidkebo/cudd/main/cudd_versions/cudd-3.0.0.tar.gz
+      VIRTUAL_CLOCK_PERIOD_NS: '4.0'
+      OUTPUT_LOAD_PF: '0.01'
+      DRIVING_CELL: sg13g2_buf_4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install build and synthesis prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            curl \
+            flex \
+            git \
+            'iverilog=12.0-2build2' \
+            libeigen3-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            wget \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Build the pinned official OpenSTA source
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-probe/tooling"
+          mkdir -p "$root"
+
+          wget --quiet "$CUDD_URL" -O "$root/cudd-3.0.0.tar.gz"
+          sha256sum "$root/cudd-3.0.0.tar.gz" \
+            | tee "$root/cudd-3.0.0.sha256.txt"
+          wc -c "$root/cudd-3.0.0.tar.gz" \
+            | tee "$root/cudd-3.0.0.size.txt"
+          tar -xzf "$root/cudd-3.0.0.tar.gz" -C "$root"
+          (
+            cd "$root/cudd-3.0.0"
+            ./configure > configure.stdout.txt 2> configure.stderr.txt
+            make -j2 > make.stdout.txt 2> make.stderr.txt
+          )
+
+          mkdir -p "$root/OpenSTA"
+          git -C "$root/OpenSTA" init
+          git -C "$root/OpenSTA" remote add origin \
+            https://github.com/parallaxsw/OpenSTA.git
+          git -C "$root/OpenSTA" fetch --depth=1 origin "$OPENSTA_COMMIT"
+          git -C "$root/OpenSTA" checkout --detach FETCH_HEAD
+          test "$(git -C "$root/OpenSTA" rev-parse HEAD)" = "$OPENSTA_COMMIT"
+
+          cmake \
+            -S "$root/OpenSTA" \
+            -B "$root/OpenSTA/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUDD_DIR="$root/cudd-3.0.0" \
+            > "$root/opensta-cmake.stdout.txt" \
+            2> "$root/opensta-cmake.stderr.txt"
+          cmake --build "$root/OpenSTA/build" --parallel 2 \
+            > "$root/opensta-build.stdout.txt" \
+            2> "$root/opensta-build.stderr.txt"
+
+          sta="$root/OpenSTA/build/sta"
+          test -x "$sta"
+          printf '%s\n' "$OPENSTA_COMMIT" > "$root/opensta.commit.txt"
+          sha256sum "$sta" | tee "$root/opensta.binary.sha256.txt"
+          ldd "$sta" | sort | tee "$root/opensta.ldd.txt"
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            cmake gcc g++ tcl-dev swig bison flex libeigen3-dev libfmt-dev \
+            yosys yosys-abc iverilog \
+            | sort \
+            | tee "$root/packages.tsv"
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Fetch and verify the pinned IHP Liberty
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/'
+                  'ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/opensta-probe/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'technology.json').write_text(
+              json.dumps(config, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/opensta-probe/input/url.txt)" \
+            --output build/opensta-probe/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/opensta-probe/input/sha256.txt)" \
+            build/opensta-probe/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Rebuild the matched ABC area-delay netlists
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/opensta-probe/source \
+            --module hephaestus_opensta_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/opensta-probe/source \
+            --out build/opensta-probe/matched \
+            --module hephaestus_opensta \
+            --verify-vectors 256 \
+            --seed 47 \
+            --simulate
+          python -m hephaestus.abc_timing build/opensta-probe/matched \
+            --technology \
+              configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/opensta-probe/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/opensta-probe/area-delay \
+            --verify-repeatability \
+            --timeout 300
+      - name: Generate six explicit SDC timing analyses
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          root = Path('build/opensta-probe')
+          evidence = json.loads(
+              (root / 'area-delay' / 'abc_area_delay_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          period = float(os.environ['VIRTUAL_CLOCK_PERIOD_NS'])
+          output_load = float(os.environ['OUTPUT_LOAD_PF'])
+          driving_cell = os.environ['DRIVING_CELL']
+          analysis_root = root / 'analyses'
+          analysis_root.mkdir(parents=True, exist_ok=True)
+
+          index = []
+          for backend_name in (
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          ):
+              backend = evidence['backends'][backend_name]
+              for label in ('unconstrained', 'd4000ps'):
+                  run = backend['runs'][label]
+                  source = root / 'area-delay' / run['artifacts'][
+                      'mapped_verilog'
+                  ]['path']
+                  run_dir = analysis_root / f'{backend_name}__{label}'
+                  run_dir.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(source, run_dir / 'dut.v')
+                  script = '\n'.join(
+                      [
+                          'read_liberty ../../input/technology.lib',
+                          'read_verilog dut.v',
+                          f"link_design {backend['module']}",
+                          f'create_clock -name virtual_clock -period {period}',
+                          'set_input_delay -clock virtual_clock 0.0 [all_inputs]',
+                          'set_output_delay -clock virtual_clock 0.0 [all_outputs]',
+                          f'set_driving_cell -lib_cell {driving_cell} [all_inputs]',
+                          f'set_load {output_load} [all_outputs]',
+                          'report_units',
+                          'check_setup -verbose',
+                          (
+                              'report_checks -path_delay max -digits 6 '
+                              '-fields {slew capacitance input_pin net fanout}'
+                          ),
+                          'set worst_slack [sta::worst_slack_cmd "max"]',
+                          'if { $worst_slack == "" } {',
+                          '  puts "HEPHAESTUS_ERROR no_worst_slack"',
+                          '  exit 2',
+                          '}',
+                          f'puts "HEPHAESTUS_PERIOD_NS {period}"',
+                          'puts "HEPHAESTUS_WORST_SLACK_NS $worst_slack"',
+                          (
+                              f'puts "HEPHAESTUS_DATA_DELAY_NS '
+                              f'[expr {{{period} - $worst_slack}}]"'
+                          ),
+                          'exit 0',
+                          '',
+                      ]
+                  )
+                  (run_dir / 'analysis.tcl').write_text(
+                      script, encoding='utf-8'
+                  )
+                  (run_dir / 'metadata.json').write_text(
+                      json.dumps(
+                          {
+                              'backend': backend_name,
+                              'label': label,
+                              'module': backend['module'],
+                              'mapped_verilog_sha256': run['artifacts'][
+                                  'mapped_verilog'
+                              ]['sha256'],
+                              'virtual_clock_period_ns': period,
+                              'input_delay_ns': 0.0,
+                              'output_delay_ns': 0.0,
+                              'driving_cell': driving_cell,
+                              'output_load_pf': output_load,
+                          },
+                          indent=2,
+                          sort_keys=True,
+                      )
+                      + '\n',
+                      encoding='utf-8',
+                  )
+                  index.append(
+                      {
+                          'backend': backend_name,
+                          'label': label,
+                          'directory': run_dir.relative_to(root).as_posix(),
+                      }
+                  )
+          (analysis_root / 'index.json').write_text(
+              json.dumps(index, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          assert len(index) == 6
+          PY
+      - name: Run pinned OpenSTA twice for every representative
+        run: |
+          set -euo pipefail
+          sta="$GITHUB_WORKSPACE/build/opensta-probe/tooling/OpenSTA/build/sta"
+          while IFS= read -r directory; do
+            for attempt in 1 2; do
+              (
+                cd "build/opensta-probe/$directory"
+                "$sta" analysis.tcl \
+                  > "opensta.${attempt}.stdout.txt" \
+                  2> "opensta.${attempt}.stderr.txt"
+              )
+            done
+          done < <(
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          for item in json.loads(
+              Path('build/opensta-probe/analyses/index.json').read_text()
+          ):
+              print(item['directory'])
+          PY
+          )
+      - name: Normalize and validate the SDC timing probe
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import math
+          import re
+          from pathlib import Path
+
+          root = Path('build/opensta-probe')
+          items = json.loads(
+              (root / 'analyses' / 'index.json').read_text(encoding='utf-8')
+          )
+          results = []
+          for item in items:
+              run_dir = root / item['directory']
+              metadata = json.loads(
+                  (run_dir / 'metadata.json').read_text(encoding='utf-8')
+              )
+              attempts = []
+              for attempt in (1, 2):
+                  stdout_path = run_dir / f'opensta.{attempt}.stdout.txt'
+                  stderr_path = run_dir / f'opensta.{attempt}.stderr.txt'
+                  stdout = stdout_path.read_text(
+                      encoding='utf-8', errors='replace'
+                  )
+                  stderr = stderr_path.read_text(
+                      encoding='utf-8', errors='replace'
+                  )
+                  combined = stdout + '\n' + stderr
+                  if 'HEPHAESTUS_ERROR' in combined:
+                      raise AssertionError(combined)
+                  markers = {}
+                  for key in (
+                      'PERIOD_NS',
+                      'WORST_SLACK_NS',
+                      'DATA_DELAY_NS',
+                  ):
+                      matches = re.findall(
+                          rf'HEPHAESTUS_{key}\s+([-+0-9.eE]+)',
+                          combined,
+                      )
+                      if len(matches) != 1:
+                          raise AssertionError(
+                              f'{item}: missing or duplicate {key}: {matches}'
+                          )
+                      markers[key.lower()] = float(matches[0])
+                  if not all(math.isfinite(value) for value in markers.values()):
+                      raise AssertionError(f'{item}: non-finite timing marker')
+                  if markers['data_delay_ns'] <= 0:
+                      raise AssertionError(f'{item}: non-positive data delay')
+                  if 'Startpoint:' not in combined or 'Endpoint:' not in combined:
+                      raise AssertionError(f'{item}: no detailed timing path')
+                  attempts.append(
+                      {
+                          **markers,
+                          'stdout_sha256': hashlib.sha256(
+                              stdout_path.read_bytes()
+                          ).hexdigest(),
+                          'stderr_sha256': hashlib.sha256(
+                              stderr_path.read_bytes()
+                          ).hexdigest(),
+                      }
+                  )
+              if attempts[0] != attempts[1]:
+                  raise AssertionError(
+                      f'{item}: OpenSTA reports are not byte-identical/repeatable'
+                  )
+              results.append(
+                  {
+                      **metadata,
+                      'timing': attempts[0],
+                      'repeatability_passed': True,
+                  }
+              )
+
+          tooling = root / 'tooling'
+          summary = {
+              'schema': 'hephaestus.opensta-sdc-probe.v1',
+              'tool': {
+                  'repository': 'parallaxsw/OpenSTA',
+                  'commit': (
+                      tooling / 'opensta.commit.txt'
+                  ).read_text(encoding='utf-8').strip(),
+                  'binary_sha256': (
+                      tooling / 'opensta.binary.sha256.txt'
+                  ).read_text(encoding='utf-8').split()[0],
+                  'cudd_archive_sha256': (
+                      tooling / 'cudd-3.0.0.sha256.txt'
+                  ).read_text(encoding='utf-8').split()[0],
+              },
+              'results': results,
+          }
+          (root / 'opensta_sdc_probe.json').write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          assert len(results) == 6
+          assert len({result['mapped_verilog_sha256'] for result in results}) == 6
+          PY
+      - name: Upload the complete OpenSTA probe bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-opensta-sdc-probe
+          path: build/opensta-probe
+          if-no-files-found: error
+          retention-days: 14
