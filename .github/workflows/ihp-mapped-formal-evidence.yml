@@ -1,0 +1,173 @@
+name: IHP mapped formal evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/ihp-mapped-formal-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mapped-formal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis and proof tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          mkdir -p build/ihp-mapped-formal/tooling
+          yosys -V | tee build/ihp-mapped-formal/tooling/yosys.version.txt
+          dpkg-query -W -f='${Package}\t${Version}\n' yosys yosys-abc iverilog \
+            | sort \
+            | tee build/ihp-mapped-formal/tooling/packages.tsv
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint mapped formal implementation
+        run: |
+          ruff check src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+          ruff format --check src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+      - name: Run mapped formal unit tests
+        run: pytest tests/test_mapped_formal.py
+      - name: Resolve and verify the pinned Liberty input
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/ihp-mapped-formal/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/ihp-mapped-formal/input/url.txt)" \
+            --output build/ihp-mapped-formal/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/ihp-mapped-formal/input/sha256.txt)" \
+            build/ihp-mapped-formal/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build and simulate matched RTL backends
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/ihp-mapped-formal/source \
+            --module hephaestus_ihp_formal_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/ihp-mapped-formal/source \
+            --out build/ihp-mapped-formal/matched \
+            --module hephaestus_ihp_formal \
+            --verify-vectors 256 \
+            --seed 41 \
+            --simulate
+      - name: Map every backend through the pinned IHP library
+        run: |
+          python -m hephaestus.mapped build/ihp-mapped-formal/matched \
+            --technology configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/ihp-mapped-formal/input/technology.lib \
+            --out build/ihp-mapped-formal/mapped \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prove every mapped netlist with Yosys SAT
+        run: |
+          python -m hephaestus.mapped_formal build/ihp-mapped-formal/mapped \
+            --codes build/ihp-mapped-formal/source/codes.npy \
+            --out build/ihp-mapped-formal/formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Validate mapped formal evidence and claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('build/ihp-mapped-formal')
+          mapped = json.loads(
+              (root / 'mapped' / 'mapped_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          formal = json.loads(
+              (root / 'formal' / 'mapped_formal_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert formal['schema'] == (
+              'hephaestus.mapped-formal-equivalence-evidence.v1'
+          )
+          assert formal['evidence_level'] == (
+              'yosys_sat_standard_cell_mapped_combinational_equivalence'
+          )
+          assert formal['technology']['technology_id'] == (
+              'ihp-sg13g2-stdcell-typ-1p20v-25c'
+          )
+          assert formal['technology']['liberty_function_model_loaded']
+          assert formal['scope']['input_bits'] == 48
+          assert formal['scope']['output_bits'] == 48
+          assert formal['scope']['combinational']
+          assert formal['scope']['sequential_depth'] == 0
+          assert set(formal['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['proof']['passed']
+              and backend['proof']['proof_success']
+              and not backend['proof']['counterexample_found']
+              and not backend['proof']['unsupported_cell_error']
+              and backend['exhaustive_over_defined_inputs']
+              for backend in formal['backends'].values()
+          )
+          assert formal['negative_control']['proof']['passed']
+          assert formal['negative_control']['proof']['counterexample_found']
+          assert not formal['negative_control']['proof']['proof_success']
+          assert not formal['negative_control']['proof']['unsupported_cell_error']
+          assert formal['claims'] == {
+              'matched_integer_contract_verified': True,
+              'standard_cell_mapping_performed': True,
+              'mapped_netlist_structurally_checked': True,
+              'mapped_gate_level_equivalence_verified': True,
+              'exhaustive_combinational_equivalence_verified': True,
+              'negative_control_counterexample_found': True,
+              'sequential_equivalence_verified': False,
+              'timing_constrained': False,
+              'timing_analyzed': False,
+              'power_estimated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          assert mapped['claims']['mapped_gate_level_equivalence_verified'] is False
+          assert (root / 'formal' / 'SUMMARY.md').is_file()
+          assert (root / 'formal' / 'technology' / 'technology.lib').is_file()
+          PY
+      - name: Upload mapped formal evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-sg13g2-mapped-formal-evidence
+          path: build/ihp-mapped-formal
+          if-no-files-found: error
+          retention-days: 30
