@@ -179,9 +179,7 @@ def test_proof_script_loads_functional_liberty_models() -> None:
         expect_counterexample=True,
     )
 
-    assert positive.startswith(
-        "read_liberty -ignore_miss_func ../../technology/technology.lib"
-    )
+    assert positive.startswith("read_liberty -ignore_miss_func ../../technology/technology.lib")
     assert "hierarchy -check -top positive_miter" in positive
     assert "check -assert" in positive
     assert "sat -verify -set-def-inputs" in positive
@@ -312,9 +310,7 @@ def test_mapped_formal_builds_self_contained_positive_and_negative_evidence(
     assert not manifest["claims"]["timing_analyzed"]
     assert (tmp_path / "out" / "mapped_formal_evidence.json").is_file()
     source_mapped = json.loads(
-        (tmp_path / "out" / "source_mapped_evidence.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "out" / "source_mapped_evidence.json").read_text(encoding="utf-8")
     )
     assert source_mapped["schema"] == "hephaestus.standard-cell-mapped-evidence.v1"
     assert (tmp_path / "out" / "SUMMARY.md").is_file()

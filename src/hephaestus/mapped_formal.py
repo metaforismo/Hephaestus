@@ -48,9 +48,7 @@ def _load_codes(path: Path) -> IntArray:
 
 def _validate_module_name(module: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", module) is None:
-        raise MappedFormalError(
-            f"unsafe or unsupported SystemVerilog module name: {module!r}"
-        )
+        raise MappedFormalError(f"unsafe or unsupported SystemVerilog module name: {module!r}")
     return module
 
 
@@ -388,9 +386,10 @@ def build_mapped_formal_evidence(
     if not isinstance(matched_manifest_value, str) or not matched_manifest_value:
         raise MappedFormalError("mapped evidence does not identify its matched manifest")
     matched_manifest_path = _resolve_bundle_artifact(bundle, matched_manifest_value)
-    if not isinstance(expected_matched_hash, str) or sha256_file(
-        matched_manifest_path
-    ) != expected_matched_hash:
+    if (
+        not isinstance(expected_matched_hash, str)
+        or sha256_file(matched_manifest_path) != expected_matched_hash
+    ):
         raise MappedFormalError("matched manifest digest does not match mapped evidence")
     matched_manifest = _load_json(matched_manifest_path)
     if matched_manifest.get("schema") != "hephaestus.matched-baselines.v1":
@@ -456,8 +455,7 @@ def build_mapped_formal_evidence(
     codes = _load_codes(source_codes)
     if codes.shape != (output_count, input_count):
         raise MappedFormalError(
-            f"codes shape {codes.shape} does not match the contract "
-            f"({output_count}, {input_count})"
+            f"codes shape {codes.shape} does not match the contract ({output_count}, {input_count})"
         )
     minimum_width = required_accumulator_width(codes, input_width)
     if accumulator_width < minimum_width:
@@ -547,9 +545,7 @@ def build_mapped_formal_evidence(
         module = _validate_module_name(str(backend.get("module", "")))
         matched_backend = matched_backends[backend_name]
         if not isinstance(matched_backend, dict):
-            raise MappedFormalError(
-                f"matched backend specification {backend_name!r} is malformed"
-            )
+            raise MappedFormalError(f"matched backend specification {backend_name!r} is malformed")
         if matched_backend.get("module") != module:
             raise MappedFormalError(
                 f"mapped backend {backend_name!r} module differs from the matched manifest"
@@ -563,17 +559,11 @@ def build_mapped_formal_evidence(
             )
         histogram = metrics.get("cell_type_histogram")
         if not isinstance(histogram, dict) or not histogram:
-            raise MappedFormalError(
-                f"mapped backend {backend_name!r} has no cell-type histogram"
-            )
+            raise MappedFormalError(f"mapped backend {backend_name!r} has no cell-type histogram")
         if any(not isinstance(cell, str) or not cell for cell in histogram):
-            raise MappedFormalError(
-                f"mapped backend {backend_name!r} has invalid cell-type names"
-            )
+            raise MappedFormalError(f"mapped backend {backend_name!r} has invalid cell-type names")
         if any(type(count) is not int or count <= 0 for count in histogram.values()):
-            raise MappedFormalError(
-                f"mapped backend {backend_name!r} has invalid cell counts"
-            )
+            raise MappedFormalError(f"mapped backend {backend_name!r} has invalid cell counts")
         mapped_cell_count = metrics.get("cell_count")
         if type(mapped_cell_count) is not int or mapped_cell_count <= 0:
             raise MappedFormalError(
@@ -644,9 +634,9 @@ def build_mapped_formal_evidence(
             "artifacts": _artifact_manifest(output, result["artifacts"]),
         }
 
-    negative_backend = "shared_dag" if "shared_dag" in resolved_backends else sorted(
-        resolved_backends
-    )[0]
+    negative_backend = (
+        "shared_dag" if "shared_dag" in resolved_backends else sorted(resolved_backends)[0]
+    )
     negative_rtl = resolved_backends[negative_backend]["mapped_verilog"]
     negative_module = resolved_backends[negative_backend]["module"]
     negative_miter_module = "hephaestus_mapped_formal_negative_control_miter"
@@ -730,9 +720,7 @@ def build_mapped_formal_evidence(
         "negative_control": {
             "backend": negative_backend,
             "fault": "xor output bit 0 with input bit 0",
-            "proof": {
-                key: value for key, value in negative_result.items() if key != "artifacts"
-            },
+            "proof": {key: value for key, value in negative_result.items() if key != "artifacts"},
             "artifacts": _artifact_manifest(output, negative_result["artifacts"]),
         },
         "claims": {
@@ -762,9 +750,7 @@ def build_mapped_formal_evidence(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Prove standard-cell mapped netlists against an exact code-matrix reference."
-        )
+        description=("Prove standard-cell mapped netlists against an exact code-matrix reference.")
     )
     parser.add_argument("mapped_bundle", type=Path)
     parser.add_argument("--codes", type=Path, required=True)
