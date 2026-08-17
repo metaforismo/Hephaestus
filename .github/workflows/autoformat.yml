@@ -23,8 +23,9 @@ jobs:
         run: python -m pip install 'ruff==0.16.3'
       - name: Apply lint and format fixes
         run: |
-          ruff check --fix .
+          ruff check --fix . || true
           ruff format .
+          ruff check .
           rm .github/workflows/autoformat.yml
       - name: Commit fixes and remove temporary workflow
         run: |
