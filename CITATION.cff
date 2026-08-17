@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: Hephaestus
+type: software
+message: "If you use Hephaestus in research, cite this software and the exact repository revision."
+authors:
+  - family-names: Giannicola
+    given-names: Francesco
+repository-code: "https://github.com/metaforismo/Hephaestus"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-08-17
