@@ -12,7 +12,8 @@ exist as shifts, signs, wires, and shared addition nodes.
 > resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
 > DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
 > evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
-> and exhaustive SAT equivalence of mapped standard-cell netlists.
+> exhaustive SAT equivalence of mapped standard-cell netlists, and technology-aware ABC area-delay
+> sweeps under versioned input-driver and output-load assumptions.
 >
 > **Not claimed:** a complete transformer compiler, timing or power closure, competitive
 > post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
@@ -134,6 +135,28 @@ functional equivalence. It is not placed area, timing, power, or post-layout PPA
 [Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md) for the exact flows, digests,
 negative controls, and claim boundaries.
 
+## First technology-aware area-delay result
+
+The same 4×6 matched backends were also mapped with the pinned IHP Liberty while declaring
+`sg13g2_buf_4` as the primary-input driving cell and 10 fF of load on each primary output. The value
+below is the achieved delay printed by ABC `stime -p`; it is not the requested `-D` target.
+
+| Backend | Cells | Liberty area | ABC delay |
+|---|---:|---:|---:|
+| Shared Hephaestus DAG | **497** | **5439.5712** | **2029.49 ps** |
+| Naive output-local shift/add | 577 | 6339.5136 | 2183.17 ps |
+| Explicit constant-multiplier source | 578 | 6334.0704 | 2270.49 ps |
+
+At this pre-layout point, the shared DAG reduces area-delay product by 20.2358% relative to naive
+shift/add and by 23.2375% relative to the explicit constant-multiplier source. The evidence also
+sweeps 1000, 2000, 4000, 8000, and 16000 ps targets, records whether each target is actually met,
+collapses duplicate coordinates, and retains the two observed Pareto points per backend.
+
+This is a technology-aware ABC estimate under versioned I/O assumptions. It is not sign-off STA,
+SDC timing closure, placed or routed timing, parasitic extraction, or measured silicon. See
+[ABC area-delay evidence](docs/ABC_AREA_DELAY.md) for the assumptions, exact reports, repeatability
+checks, regression reference, and claim boundary.
+
 ## Research thesis
 
 Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
@@ -157,6 +180,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Formal equivalence](docs/FORMAL_EQUIVALENCE.md),
 [Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md),
 [Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md),
+[ABC area-delay evidence](docs/ABC_AREA_DELAY.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
