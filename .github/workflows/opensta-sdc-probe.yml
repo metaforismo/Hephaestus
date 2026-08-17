@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/opensta-sdc-probe
+  pull_request:
   workflow_dispatch:
 
 permissions:
