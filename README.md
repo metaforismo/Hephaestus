@@ -1,51 +1,52 @@
 # Hephaestus
 
-**A model-to-metal research compiler for neural networks whose weights become circuit topology.**
+**An open model-to-metal research compiler for neural-network weights that become circuit topology.**
 
-Hephaestus currently takes one constant 2-D weight matrix, quantizes it to signed powers of two,
-finds reusable partial sums, and emits synthesizable SystemVerilog. The generated core contains
-no weight array, weight address bus, codebook ROM, or runtime weight-fetch path. Its coefficients
+Hephaestus takes a constant two-dimensional tensor, quantizes it to signed powers of two, finds
+reusable partial sums, and emits synthesizable SystemVerilog. The generated direct-logic core has
+no weight array, weight address bus, codebook ROM, or runtime coefficient-fetch path. Coefficients
 exist as shifts, signs, wires, and shared addition nodes.
 
-> **What is real today:** a tested matrix → quantization → shared adder DAG → RTL path with
-> bit-exact integer verification.
+> **Implemented and tested:** JSON/NumPy/Safetensors tensor access, Hugging Face sharded-index
+> resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
+> DAG, RTL emission, structural evidence, and randomized bit-exact integer verification.
 >
-> **What is not claimed yet:** a complete Hugging Face transformer compiler, competitive PPA,
-> 40,000 tokens/s, a 7 nm tapeout, post-layout energy, or measured silicon.
+> **Not claimed:** a complete transformer compiler, competitive post-layout PPA, 40,000 tokens/s,
+> a 7 nm tapeout, extracted energy, or measured silicon.
 
 ## Why this direction
 
 Conventional accelerators repeatedly move model parameters through a memory hierarchy. A fixed
-model creates a different design point: compile stable parameters into the implementation and
-move activations instead. Hephaestus explores a direct-logic branch of that space:
+model creates a different design point: compile stable parameters into the implementation and move
+activations instead. Hephaestus explores a direct-logic branch of that space:
 
 ```text
-checkpoint tensor
-      │
-      ▼
+checkpoint tensor or bounded tile
+              │
+              ▼
 power-of-two, sensitivity-aware quantization
-      │
-      ▼
-constant-matrix IR
-      │
-      ▼
+              │
+              ▼
+constant-matrix ZeroFetch IR
+              │
+              ▼
 global common-subexpression elimination
-      │
-      ▼
+              │
+              ▼
 shift / sign / shared-adder DAG
-      │
-      ▼
+              │
+              ▼
 SystemVerilog → Yosys → OpenROAD → GDS → DRC/LVS/PEX
 ```
 
-The central invariant is narrow and testable:
+The central invariant is deliberately narrow and testable:
 
 ```text
 runtime weight reads per compiled matrix-vector operation = 0
 ```
 
-Activations, accumulators, control state, KV cache, residuals, and model I/O still move. “Zero
-weight fetch” is not “zero memory” and it is not itself an energy result.
+Activations, accumulators, control state, KV cache, residuals, and model I/O still move. Zero weight
+fetch is not zero memory, zero physical representation, or an energy result.
 
 ## Quick start
 
@@ -60,27 +61,42 @@ hephaestus compile examples/tiny_weights.json \
 ./scripts/check_rtl.sh build/tiny/hephaestus_tiny.sv hephaestus_tiny
 ```
 
-The build directory contains:
+The output directory contains:
 
 ```text
 build/tiny/
 ├── hephaestus_tiny.sv       # fixed-topology RTL
-├── manifest.json            # quantization, cost and claim evidence
+├── manifest.json            # source, quantization, topology, verification, claim stage
 ├── plan.json                # serializable addition DAG
 ├── codes.npy                # quantized integer coefficient oracle
-└── row_scale_exponents.npy  # exact 2^e output scales
+└── row_scale_exponents.npy  # exact 2^e output-scale metadata
 ```
 
-Local Safetensors support is optional:
+## Hugging Face Safetensors
+
+Hephaestus never deserializes pickle checkpoints. It can inspect a direct Safetensors file, a
+Hugging Face `*.safetensors.index.json`, or a directory containing one unambiguous checkpoint:
 
 ```bash
-python -m pip install -e ".[hf]"
-hephaestus compile model.safetensors --tensor-key model.layers.0.mlp.up_proj.weight
+hephaestus tensors /models/llama-checkpoint
 ```
 
-Hephaestus does not deserialize pickle checkpoints.
+A bounded tile can be compiled without materializing the other model shards or the rest of the
+selected tensor:
 
-## Current compiler
+```bash
+hephaestus compile /models/llama-checkpoint \
+  --tensor-key model.layers.0.mlp.up_proj.weight \
+  --rows 0:128 \
+  --columns 0:256 \
+  --out build/layer0-up-tile
+```
+
+The manifest records the original shape, selected ranges, actual shard, index digest when present,
+and a canonical digest of exactly the floating-point values consumed by the compiler. It does not
+hash an entire multi-gigabyte shard merely to compile a small tile.
+
+## Current numerical representation
 
 The first quantizer uses a codebook such as:
 
@@ -88,39 +104,43 @@ The first quantizer uses a codebook such as:
 {-4, -2, -1, 0, 1, 2, 4}
 ```
 
-Each row receives an exactly representable power-of-two scale. The compiler then lowers every
-nonzero coefficient to one signed shift of an input and performs global common-subexpression
-elimination before building balanced adder trees. A Python evaluator proves that the serialized
-DAG equals the integer matrix for randomly generated input vectors.
+Each output row receives an exactly representable power-of-two scale. The integer core computes the
+code matrix; the row exponents remain explicit metadata for later fixed-point scheduling. An
+optional one-dimensional activation-importance vector or full matrix can weight quantization error.
 
-This is deliberately small enough to inspect. It establishes the semantic and evidence spine
-before adding model import, calibration, physical design, and advanced-node backends.
+The lowerer turns every nonzero code into one signed shift of an input, greedily shares repeated
+partial sums across outputs, and hash-conses the remaining balanced addition trees. A Python
+reference evaluator checks the serialized graph with arbitrary-precision integers, avoiding false
+success caused by NumPy `int64` overflow.
 
 ## Research thesis
 
-Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is co-design:
+Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
+logical, and physical co-design:
 
-1. **Quantization for physical cost, not only perplexity.** Optimize accuracy together with
-   adder count, depth, fanout, routing demand, and switching activity.
-2. **Direct constant-matrix synthesis.** Use shift/add/subtract networks, structured sparsity,
-   factorization, and cross-output sharing instead of reading one encoded weight at a time.
-3. **A small programmable residual plane.** Keep outliers, adapters, calibration values, or model
-   updates configurable while the dominant base matrix is fixed.
-4. **Physical feedback.** Feed synthesis and placement results back into quantization and graph
-   rewriting. A mathematically smaller netlist can still lose after routing.
-5. **Open-PDK evidence first.** Prove bit-exactness, PPA, DRC/LVS and PEX on an accessible node
-   before treating an NDA-gated 7 nm flow as the development environment.
+1. **Quantize for physical cost, not only model error.** Optimize quality together with adder
+   count, depth, fanout, congestion, wire length, and switching.
+2. **Synthesize the constant matrix directly.** Explore signed-digit recoding, shared sums,
+   structured sparsity, low-rank or transform factorization, and placement-aware tile partitioning.
+3. **Retain a small programmable residual plane.** Keep outliers, adapters, calibration values,
+   and model patches configurable while the dominant base is fixed.
+4. **Close the physical feedback loop.** Feed synthesis and place-and-route evidence back into
+   quantization and graph rewriting. A smaller mathematical graph can lose after buffering.
+5. **Use accessible process evidence first.** Establish equivalence, PPA, DRC/LVS, and PEX on an
+   open or accessible node before making advanced-node product claims.
 
 See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Roadmap](docs/ROADMAP.md), [Benchmarking](docs/BENCHMARKING.md),
-[Taalas IP landscape](docs/IP_LANDSCAPE.md), and [Foundry path](docs/FOUNDRY_PATH.md).
+[Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
+[Research plan](docs/RESEARCH.md).
 
 ## Project status
 
-Hephaestus is pre-alpha research software. Generated RTL has not yet been fabricated. Patent
-notes are technical reading, not a freedom-to-operate opinion. Any commercial implementation
-needs qualified semiconductor engineering, verification, security review, and patent counsel.
+Hephaestus is pre-alpha research software. Generated RTL has not been fabricated. Patent notes are
+technical reading, not a freedom-to-operate opinion. Commercial work requires qualified digital,
+physical-design, verification, DFT, package, safety, security, and patent specialists.
 
 ## License
 
-Apache-2.0. Proprietary PDKs and third-party model checkpoints are not part of this repository.
+Apache-2.0. Proprietary PDKs, standard-cell libraries, foundry collateral, and third-party model
+checkpoints are not part of this repository.
