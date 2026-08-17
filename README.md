@@ -9,7 +9,8 @@ exist as shifts, signs, wires, and shared addition nodes.
 
 > **Implemented and tested:** JSON/NumPy/Safetensors tensor access, Hugging Face sharded-index
 > resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
-> DAG, RTL emission, structural evidence, and randomized bit-exact integer verification.
+> DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
+> evidence, randomized bit-exact checks, and bounded exhaustive Yosys-SAT equivalence.
 >
 > **Not claimed:** a complete transformer compiler, competitive post-layout PPA, 40,000 tokens/s,
 > a 7 nm tapeout, extracted energy, or measured silicon.
@@ -133,6 +134,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Roadmap](docs/ROADMAP.md), [Benchmarking](docs/BENCHMARKING.md),
 [Structural evidence](docs/EVIDENCE.md), [Matched RTL baselines](docs/MATCHED_BASELINES.md),
 [Generic Yosys evidence](docs/SYNTHESIS_EVIDENCE.md),
+[Formal equivalence](docs/FORMAL_EQUIVALENCE.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 

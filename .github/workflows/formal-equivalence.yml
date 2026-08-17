@@ -1,0 +1,102 @@
+name: Formal equivalence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/formal-equivalence-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  yosys-sat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install RTL tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog yosys
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint formal implementation
+        run: |
+          ruff check src/hephaestus/formal.py tests/test_formal.py
+          ruff format --check src/hephaestus/formal.py tests/test_formal.py
+      - name: Run formal unit tests
+        run: pytest tests/test_formal.py
+      - name: Build verified matched bundle
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/formal/source \
+            --module hephaestus_formal_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/formal/source \
+            --out build/formal/matched \
+            --module hephaestus_formal \
+            --verify-vectors 256 \
+            --seed 29 \
+            --simulate
+      - name: Prove every backend with Yosys SAT
+        run: |
+          python -m hephaestus.formal build/formal/matched \
+            --codes build/formal/source/codes.npy \
+            --out build/formal/evidence \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Validate formal evidence
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('build/formal/evidence')
+          evidence = json.loads(
+              (root / 'formal_evidence.json').read_text(encoding='utf-8')
+          )
+          assert evidence['evidence_level'] == (
+              'yosys_sat_combinational_equivalence'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['proof']['passed']
+              and backend['proof']['proof_success']
+              and not backend['proof']['counterexample_found']
+              and backend['exhaustive_over_defined_inputs']
+              for backend in evidence['backends'].values()
+          )
+          negative = evidence['negative_control']['proof']
+          assert negative['passed']
+          assert negative['counterexample_found']
+          assert not negative['proof_success']
+          assert (root / evidence['source']['matched_manifest']).is_file()
+          assert (root / evidence['source']['codes']).is_file()
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'exhaustive_combinational_equivalence_verified': True,
+              'negative_control_counterexample_found': True,
+              'sequential_equivalence_verified': False,
+              'standard_cell_mapping_performed': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          PY
+      - name: Upload formal evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-formal-equivalence-evidence
+          path: build/formal
+          if-no-files-found: error
+          retention-days: 30
