@@ -1,0 +1,72 @@
+name: Apply IHP ABC area-delay payload
+
+on:
+  push:
+    branches:
+      - feat/ihp-abc-area-delay-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ihp-abc-area-delay-evidence
+      - name: Reconstruct and verify the staged payload
+        run: |
+          set -euo pipefail
+          cat .bootstrap/ihp-abc-area-delay/payload.part* \
+            > /tmp/hephaestus-abc-area-delay.b64
+          printf '%s  %s\n' \
+            2ab7c8e6058bab05cb0f489a4bf2da0f95ddeed436dbc17a7a4a1dfd24c3827f \
+            /tmp/hephaestus-abc-area-delay.b64 \
+            | sha256sum --check --strict
+          base64 --decode /tmp/hephaestus-abc-area-delay.b64 \
+            > /tmp/hephaestus-abc-area-delay.tar.gz
+          printf '%s  %s\n' \
+            859afe923db789ecfd3d3259884e0d60e98f83e1b7172a63c4b590f4620343e7 \
+            /tmp/hephaestus-abc-area-delay.tar.gz \
+            | sha256sum --check --strict
+          tar -xzf /tmp/hephaestus-abc-area-delay.tar.gz -C .
+      - name: Verify extracted source files
+        run: |
+          set -euo pipefail
+          cat > /tmp/hephaestus-abc-area-delay-files.sha256 <<'EOF'
+          2d126bf0e04b23080366d50d6bf64ca45e4087fd452099ffecd6d9c6fbff5289  README.md
+          072c2b4dd33b310e30d8952c261112c0c99b050824666eebe28756cbc79dcc86  docs/ABC_AREA_DELAY.md
+          3d9128046b1cd9c22d8bc9d65f29e655832a28f7a238e077fb0cebf79896ba4e  src/hephaestus/abc_timing.py
+          c2c8a383c8cfedf8ff9d6a682a5c3622febaf44d39eaa61ae96ec22e849cb1c2  tests/test_abc_timing.py
+          c9189ccd314b56324335da9cf2bc24f45f307d9cd0c033d30bb94724a6df5664  configs/evidence/ihp_sg13g2_abc_area_delay_v1.json
+          d5fcfc69897eac6394ca95fa5915ba4dbafdea7f6bcb5a317eb54925e71cf0ac  benchmarks/reference/ihp_sg13g2_abc_area_delay_tiny_v1.json
+          EOF
+          sha256sum --check --strict \
+            /tmp/hephaestus-abc-area-delay-files.sha256
+          python -m py_compile \
+            src/hephaestus/abc_timing.py \
+            tests/test_abc_timing.py
+          git diff --check -- \
+            README.md \
+            docs/ABC_AREA_DELAY.md \
+            src/hephaestus/abc_timing.py \
+            tests/test_abc_timing.py \
+            configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            benchmarks/reference/ihp_sg13g2_abc_area_delay_tiny_v1.json
+      - name: Commit the production source and evidence contract
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            README.md \
+            docs/ABC_AREA_DELAY.md \
+            src/hephaestus/abc_timing.py \
+            tests/test_abc_timing.py \
+            configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            benchmarks/reference/ihp_sg13g2_abc_area_delay_tiny_v1.json
+          git diff --cached --check
+          git commit -m 'Add IHP ABC area-delay evidence implementation'
+          git push origin HEAD:feat/ihp-abc-area-delay-evidence
