@@ -17,7 +17,6 @@ from numpy.typing import NDArray
 from .lower import required_accumulator_width
 from .report import sha256_file, write_json
 
-
 IntArray = NDArray[np.int64]
 
 
@@ -180,8 +179,7 @@ def emit_reference_systemverilog(
             lines.append(f"    {accumulator} = {accumulator} + {term};")
         lines.append("  end")
         lines.append(
-            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = "
-            f"{accumulator};"
+            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = {accumulator};"
         )
         lines.append("")
 
@@ -227,10 +225,7 @@ def emit_miter_systemverilog(
             [
                 f"  wire [{output_bits - 1}:0] fault_mask;",
                 f"  wire signed [{output_bits - 1}:0] y_faulted;",
-                (
-                    f"  assign fault_mask = "
-                    f"{{{{{output_bits - 1}{{1'b0}}}}, x_flat[0]}};"
-                ),
+                (f"  assign fault_mask = {{{{{output_bits - 1}{{1'b0}}}}, x_flat[0]}};"),
                 "  assign y_faulted = y_dut ^ fault_mask;",
                 "  assign mismatch = |(y_faulted ^ y_reference);",
             ]
@@ -395,15 +390,13 @@ def build_formal_evidence(
     output_bits = output_count * accumulator_width
     if input_bits > max_input_bits:
         raise FormalError(
-            f"formal input width {input_bits} exceeds the configured limit "
-            f"of {max_input_bits} bits"
+            f"formal input width {input_bits} exceeds the configured limit of {max_input_bits} bits"
         )
 
     codes = _load_codes(source_codes_path)
     if codes.shape != (output_count, input_count):
         raise FormalError(
-            f"codes shape {codes.shape} does not match the contract "
-            f"({output_count}, {input_count})"
+            f"codes shape {codes.shape} does not match the contract ({output_count}, {input_count})"
         )
     minimum_width = required_accumulator_width(codes, input_width)
     if accumulator_width < minimum_width:
@@ -485,9 +478,7 @@ def build_formal_evidence(
             "source_rtl": rtl_value,
             "exhaustive_over_defined_inputs": True,
             "input_bits": input_bits,
-            "proof": {
-                key: value for key, value in result.items() if key != "artifacts"
-            },
+            "proof": {key: value for key, value in result.items() if key != "artifacts"},
             "artifacts": {
                 label: {
                     "path": path.relative_to(output).as_posix(),
@@ -555,11 +546,7 @@ def build_formal_evidence(
         "negative_control": {
             "backend": negative_backend,
             "fault": "xor output bit 0 with input bit 0",
-            "proof": {
-                key: value
-                for key, value in negative_result.items()
-                if key != "artifacts"
-            },
+            "proof": {key: value for key, value in negative_result.items() if key != "artifacts"},
             "artifacts": {
                 label: {
                     "path": path.relative_to(output).as_posix(),
