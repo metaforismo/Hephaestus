@@ -1,0 +1,26 @@
+{
+  "schema": "hephaestus.technology.v1",
+  "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+  "provider": "IHP",
+  "process": "SG13G2",
+  "library": {
+    "name": "sg13g2_stdcell_typ_1p20V_25C",
+    "corner": "typical",
+    "nominal_voltage": 1.2,
+    "nominal_temperature_c": 25,
+    "area_unit": "liberty_library_area_unit",
+    "sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396",
+    "bytes": 1720231
+  },
+  "source": {
+    "repository": "IHP-GmbH/IHP-Open-PDK",
+    "commit": "22f2a25f1734796de3debbbf29cf697cbbc54081",
+    "path": "ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_typ_1p20V_25C.lib",
+    "url": "https://raw.githubusercontent.com/IHP-GmbH/IHP-Open-PDK/22f2a25f1734796de3debbbf29cf697cbbc54081/ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_typ_1p20V_25C.lib"
+  },
+  "flow": {
+    "mapper": "yosys-abc",
+    "timing_constraint": null,
+    "physical_design": false
+  }
+}
