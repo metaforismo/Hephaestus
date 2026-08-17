@@ -1,0 +1,83 @@
+name: Matched baselines
+
+on:
+  push:
+    branches:
+      - main
+      - feat/matched-backend-baselines
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  matched-rtl:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install RTL tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog yosys
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint baseline implementation
+        run: |
+          ruff check src/hephaestus/baselines.py tests/test_baselines.py
+          ruff format --check src/hephaestus/baselines.py tests/test_baselines.py
+      - name: Run baseline tests
+        run: pytest tests/test_baselines.py
+      - name: Compile the shared-DAG source artifact
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/matched/source \
+            --module hephaestus_matched_source \
+            --verify-samples 256
+      - name: Generate and simulate matched backends
+        run: |
+          python -m hephaestus.baselines build/matched/source \
+            --out build/matched/backends \
+            --module hephaestus_matched \
+            --verify-vectors 256 \
+            --seed 17 \
+            --simulate
+      - name: Synthesize every matched backend with generic Yosys
+        run: |
+          yosys -q -p 'read_verilog -sv build/matched/backends/shared_dag.sv; hierarchy -check -top hephaestus_matched_source; proc; opt; check; stat'
+          yosys -q -p 'read_verilog -sv build/matched/backends/constant_multipliers.sv; hierarchy -check -top hephaestus_matched_constant_multipliers; proc; opt; check; stat'
+          yosys -q -p 'read_verilog -sv build/matched/backends/naive_shift_add.sv; hierarchy -check -top hephaestus_matched_naive_shift_add; proc; opt; check; stat'
+      - name: Validate matched manifest
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path('build/matched/backends/matched_manifest.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert set(manifest['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert manifest['verification']['simulation']['passed'] is True
+          assert manifest['claims'] == {
+              'matched_integer_contract_verified': True,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          PY
+      - name: Upload matched backend bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-matched-backends
+          path: build/matched
+          if-no-files-found: error
+          retention-days: 30
