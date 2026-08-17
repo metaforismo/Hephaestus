@@ -1,0 +1,191 @@
+{
+  "schema": "hephaestus.abc-area-delay-reference.v1",
+  "reference_id": "ihp-sg13g2-abc-area-delay-tiny-v1",
+  "case": {
+    "source": "examples/tiny_weights.json",
+    "input_bits": 48,
+    "output_bits": 48,
+    "domain": "quantized_integer_core_before_row_scaling",
+    "latency_cycles": 0
+  },
+  "technology": {
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396",
+    "driving_cell": "sg13g2_buf_4",
+    "output_load_femtofarads": 10.0
+  },
+  "tooling": {
+    "yosys": "0.33-5build2",
+    "yosys_abc": "0.33-5build2",
+    "iverilog": "12.0-2build2"
+  },
+  "expected": {
+    "shared_dag": {
+      "unconstrained": {
+        "cell_count": 497,
+        "library_area": 5439.5712,
+        "delay_picoseconds": 2029.49,
+        "target_met": null
+      },
+      "d1000ps": {
+        "cell_count": 497,
+        "library_area": 5439.5712,
+        "delay_picoseconds": 2029.49,
+        "target_met": false
+      },
+      "d2000ps": {
+        "cell_count": 497,
+        "library_area": 5439.5712,
+        "delay_picoseconds": 2029.49,
+        "target_met": false
+      },
+      "d4000ps": {
+        "cell_count": 497,
+        "library_area": 5386.9536,
+        "delay_picoseconds": 2077.58,
+        "target_met": true
+      },
+      "d8000ps": {
+        "cell_count": 497,
+        "library_area": 5386.9536,
+        "delay_picoseconds": 2077.58,
+        "target_met": true
+      },
+      "d16000ps": {
+        "cell_count": 497,
+        "library_area": 5386.9536,
+        "delay_picoseconds": 2077.58,
+        "target_met": true
+      },
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ]
+    },
+    "naive_shift_add": {
+      "unconstrained": {
+        "cell_count": 577,
+        "library_area": 6339.5136,
+        "delay_picoseconds": 2183.17,
+        "target_met": null
+      },
+      "d1000ps": {
+        "cell_count": 577,
+        "library_area": 6339.5136,
+        "delay_picoseconds": 2183.17,
+        "target_met": false
+      },
+      "d2000ps": {
+        "cell_count": 577,
+        "library_area": 6339.5136,
+        "delay_picoseconds": 2183.17,
+        "target_met": false
+      },
+      "d4000ps": {
+        "cell_count": 577,
+        "library_area": 6306.8544,
+        "delay_picoseconds": 2217.09,
+        "target_met": true
+      },
+      "d8000ps": {
+        "cell_count": 577,
+        "library_area": 6306.8544,
+        "delay_picoseconds": 2217.09,
+        "target_met": true
+      },
+      "d16000ps": {
+        "cell_count": 577,
+        "library_area": 6306.8544,
+        "delay_picoseconds": 2217.09,
+        "target_met": true
+      },
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ]
+    },
+    "constant_multipliers": {
+      "unconstrained": {
+        "cell_count": 578,
+        "library_area": 6334.0704,
+        "delay_picoseconds": 2270.49,
+        "target_met": null
+      },
+      "d1000ps": {
+        "cell_count": 578,
+        "library_area": 6334.0704,
+        "delay_picoseconds": 2270.49,
+        "target_met": false
+      },
+      "d2000ps": {
+        "cell_count": 578,
+        "library_area": 6334.0704,
+        "delay_picoseconds": 2270.49,
+        "target_met": false
+      },
+      "d4000ps": {
+        "cell_count": 578,
+        "library_area": 6277.824,
+        "delay_picoseconds": 2285.89,
+        "target_met": true
+      },
+      "d8000ps": {
+        "cell_count": 578,
+        "library_area": 6277.824,
+        "delay_picoseconds": 2285.89,
+        "target_met": true
+      },
+      "d16000ps": {
+        "cell_count": 578,
+        "library_area": 6277.824,
+        "delay_picoseconds": 2285.89,
+        "target_met": true
+      },
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ]
+    }
+  },
+  "comparisons_to_shared_dag": {
+    "unconstrained": {
+      "naive_shift_add": {
+        "area_reduction_percent": 14.195764167143674,
+        "delay_reduction_percent": 7.039305230467626,
+        "area_delay_product_reduction_percent": 20.235786228088706
+      },
+      "constant_multipliers": {
+        "area_reduction_percent": 14.122028072185609,
+        "delay_reduction_percent": 10.614448863461183,
+        "area_delay_product_reduction_percent": 23.237501487441026
+      }
+    },
+    "d4000ps": {
+      "naive_shift_add": {
+        "area_reduction_percent": 14.585730724971237,
+        "delay_reduction_percent": 6.292482488306754,
+        "area_delay_product_reduction_percent": 19.960408661617603
+      },
+      "constant_multipliers": {
+        "area_reduction_percent": 14.190751445086702,
+        "delay_reduction_percent": 9.112861948737688,
+        "area_delay_product_reduction_percent": 22.010429805145147
+      }
+    }
+  },
+  "first_verified_probe": {
+    "workflow_run": 32072386419,
+    "head_sha": "084643a40322cce7d03e7ec9fe744eaf75f3d36f",
+    "artifact_sha256": "5dce4ba374a025d0b6a55dba278e1b1f50d6a5a35fda32c534cb090327ceaafa"
+  },
+  "claim_boundary": {
+    "abc_internal_timing_estimated": true,
+    "signoff_sta_performed": false,
+    "sdc_timing_analyzed": false,
+    "timing_closed": false,
+    "placement_performed": false,
+    "routing_performed": false,
+    "post_layout_pex_verified": false,
+    "silicon_verified": false
+  }
+}
