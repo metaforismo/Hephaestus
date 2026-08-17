@@ -137,9 +137,9 @@ build/ihp-mapped/
 
 All preserved artifacts receive SHA-256 digests in `mapped_evidence.json`.
 
-## Claim boundary
+## Layered claim boundary
 
-This evidence may claim:
+The mapping artifact itself may claim:
 
 ```json
 {
@@ -149,11 +149,25 @@ This evidence may claim:
 }
 ```
 
-It must still report:
+It deliberately reports this field as false:
 
 ```json
 {
-  "mapped_gate_level_equivalence_verified": false,
+  "mapped_gate_level_equivalence_verified": false
+}
+```
+
+That is not a missing result hidden by documentation. Mapping and formal proof are separate evidence
+operations. The subsequent
+[Mapped standard-cell formal equivalence](MAPPED_FORMAL_EQUIVALENCE.md) layer consumes the
+preserved mapped bundle, loads the Liberty Boolean functions, proves every post-ABC netlist against
+an independent code-matrix reference, and emits a new manifest where mapped gate-level equivalence
+is true.
+
+Both layers must still report:
+
+```json
+{
   "timing_constrained": false,
   "timing_analyzed": false,
   "power_estimated": false,
@@ -167,5 +181,5 @@ It must still report:
 
 The Liberty `area` values are library units used for a mapped-cell estimate. They are not placed die
 area and are not labelled as square micrometres here. The next physical evidence level must add
-matched timing constraints, mapped gate-level equivalence, placement, routing, extraction, and
-activity-based power before drawing conclusions about PPA.
+matched timing constraints, placement, routing, extraction, and activity-based power before drawing
+conclusions about PPA.
