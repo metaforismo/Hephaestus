@@ -1,0 +1,61 @@
+name: Evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/evidence-benchmarks
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  structural-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint benchmark implementation
+        run: |
+          ruff check src/hephaestus/benchmark.py tests/test_benchmark.py
+          ruff format --check src/hephaestus/benchmark.py tests/test_benchmark.py
+      - name: Run benchmark tests
+        run: pytest tests/test_benchmark.py
+      - name: Build structural evidence bundle
+        run: |
+          python -m hephaestus.benchmark benchmarks/suites/tiny.json \
+            --out build/evidence/tiny
+      - name: Validate claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence = json.loads(
+              Path('build/evidence/tiny/evidence.json').read_text(encoding='utf-8')
+          )
+          assert evidence['evidence_level'] == 'algorithmic_and_rtl'
+          assert evidence['claims'] == {
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          assert all(
+              case['claims']['bit_exact_integer_core_verified']
+              and case['metrics']['runtime_weight_reads_per_matvec'] == 0
+              for case in evidence['cases']
+          )
+          PY
+      - name: Upload evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-structural-evidence
+          path: build/evidence/tiny
+          if-no-files-found: error
+          retention-days: 30
