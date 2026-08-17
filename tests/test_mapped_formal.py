@@ -73,9 +73,7 @@ def test_mapped_proof_script_loads_functional_liberty_and_fails_closed() -> None
         expect_counterexample=True,
     )
 
-    assert positive.startswith(
-        "read_liberty -ignore_miss_func ../../technology/technology.lib"
-    )
+    assert positive.startswith("read_liberty -ignore_miss_func ../../technology/technology.lib")
     assert "hierarchy -check -top mapped_positive_miter" in positive
     assert "check -assert" in positive
     assert "sat -verify -set-def-inputs" in positive

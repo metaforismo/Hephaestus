@@ -45,9 +45,7 @@ def _load_codes(path: Path) -> IntArray:
 
 def _validate_module_name(module: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", module) is None:
-        raise MappedFormalError(
-            f"unsafe or unsupported SystemVerilog module name: {module!r}"
-        )
+        raise MappedFormalError(f"unsafe or unsupported SystemVerilog module name: {module!r}")
     return module
 
 
@@ -592,9 +590,7 @@ def build_mapped_formal_evidence(
         "negative_control": {
             "backend": negative_backend,
             "fault": "xor output bit 0 with input bit 0",
-            "proof": {
-                key: value for key, value in negative_result.items() if key != "artifacts"
-            },
+            "proof": {key: value for key, value in negative_result.items() if key != "artifacts"},
             "artifacts": _relative_artifacts(negative_result["artifacts"], output),
         },
         "claims": {
