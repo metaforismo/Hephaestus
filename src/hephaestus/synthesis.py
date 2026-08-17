@@ -223,9 +223,7 @@ def _run_yosys(
     (run_dir / "yosys.stdout.txt").write_text(completed.stdout, encoding="utf-8")
     (run_dir / "yosys.stderr.txt").write_text(completed.stderr, encoding="utf-8")
     if completed.returncode != 0:
-        raise SynthesisError(
-            f"Yosys failed for backend {run_dir.name!r}; inspect yosys.stderr.txt"
-        )
+        raise SynthesisError(f"Yosys failed for backend {run_dir.name!r}; inspect yosys.stderr.txt")
 
     artifacts = _required_run_artifacts(run_dir)
     missing = [label for label, path in artifacts.items() if not path.is_file()]
