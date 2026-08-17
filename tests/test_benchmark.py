@@ -30,9 +30,9 @@ def test_logical_baseline_counts_terms_and_row_adders() -> None:
 
 def test_count_adder_nodes_accepts_explicit_and_binary_schemas() -> None:
     assert _count_adder_nodes({"nodes": [{"op": "add"}, {"op": "sub"}]}) == 2
-    assert _count_adder_nodes(
-        {"nodes": [{"lhs": "x0", "rhs": "x1"}, {"lhs": "n0", "rhs": "x2"}]}
-    ) == 2
+    assert (
+        _count_adder_nodes({"nodes": [{"lhs": "x0", "rhs": "x1"}, {"lhs": "n0", "rhs": "x2"}]}) == 2
+    )
     assert _count_adder_nodes({"addition_nodes": [{}, {}, {}]}) == 3
 
 
@@ -49,14 +49,8 @@ def test_tiny_evidence_suite_runs_end_to_end(tmp_path: Path) -> None:
         "tiny_exact",
         "shared_pairs",
     ]
-    assert all(
-        case["claims"]["bit_exact_integer_core_verified"]
-        for case in result["cases"]
-    )
-    assert all(
-        case["metrics"]["runtime_weight_reads_per_matvec"] == 0
-        for case in result["cases"]
-    )
+    assert all(case["claims"]["bit_exact_integer_core_verified"] for case in result["cases"])
+    assert all(case["metrics"]["runtime_weight_reads_per_matvec"] == 0 for case in result["cases"])
     assert result["claims"] == {
         "post_synthesis_ppa_measured": False,
         "post_layout_pex_verified": False,

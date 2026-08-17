@@ -18,7 +18,6 @@ from typing import Any
 
 import numpy as np
 
-
 SCHEMA_VERSION = 1
 
 
@@ -174,12 +173,8 @@ def _extract_claims(manifest: Any) -> dict[str, bool]:
     )
     return {
         "bit_exact_integer_core_verified": bool(bit_exact),
-        "post_synthesis_ppa_measured": bool(
-            _first_bool(manifest, "post_synthesis_ppa_measured")
-        ),
-        "post_layout_pex_verified": bool(
-            _first_bool(manifest, "post_layout_pex_verified")
-        ),
+        "post_synthesis_ppa_measured": bool(_first_bool(manifest, "post_synthesis_ppa_measured")),
+        "post_layout_pex_verified": bool(_first_bool(manifest, "post_layout_pex_verified")),
         "silicon_verified": bool(_first_bool(manifest, "silicon_verified")),
     }
 
@@ -195,7 +190,9 @@ def _case_metrics(codes: np.ndarray, plan: Any, manifest: Any) -> StructuralMetr
         "addition_nodes",
         "adders",
     )
-    compiled_adders = int(compiled_value) if compiled_value is not None else _count_adder_nodes(plan)
+    compiled_adders = (
+        int(compiled_value) if compiled_value is not None else _count_adder_nodes(plan)
+    )
 
     saved = None if compiled_adders is None else naive_adders - compiled_adders
     reduction = None
@@ -230,9 +227,7 @@ def _case_metrics(codes: np.ndarray, plan: Any, manifest: Any) -> StructuralMetr
         adder_reduction_fraction=reduction,
         max_depth=int(depth_value) if depth_value is not None else None,
         max_fanout=int(fanout_value) if fanout_value is not None else None,
-        runtime_weight_reads_per_matvec=(
-            int(reads_value) if reads_value is not None else None
-        ),
+        runtime_weight_reads_per_matvec=(int(reads_value) if reads_value is not None else None),
         weighted_quantization_mse=float(mse_value) if mse_value is not None else None,
     )
 
@@ -244,8 +239,7 @@ def _resolve_source(repo_root: Path, suite_path: Path, source: str) -> Path:
     resolved = candidate.resolve()
     if not resolved.is_file():
         raise BenchmarkError(
-            f"benchmark source does not exist: {source} "
-            f"(suite: {suite_path.as_posix()})"
+            f"benchmark source does not exist: {source} (suite: {suite_path.as_posix()})"
         )
     return resolved
 
@@ -323,9 +317,7 @@ def _compile_case(
     metrics = _case_metrics(codes, plan, manifest)
     claims = _extract_claims(manifest)
 
-    if bool(case.get("require_bit_exact", True)) and not claims[
-        "bit_exact_integer_core_verified"
-    ]:
+    if bool(case.get("require_bit_exact", True)) and not claims["bit_exact_integer_core_verified"]:
         raise BenchmarkError(f"case {name!r} did not prove bit-exact integer-core equivalence")
     if bool(case.get("require_zero_weight_reads", True)):
         reads = metrics.runtime_weight_reads_per_matvec
@@ -334,7 +326,9 @@ def _compile_case(
         if reads != 0:
             raise BenchmarkError(f"case {name!r} reported {reads} runtime weight reads")
 
-    artifacts = {label: path.relative_to(output_root).as_posix() for label, path in required.items()}
+    artifacts = {
+        label: path.relative_to(output_root).as_posix() for label, path in required.items()
+    }
     hashes = {label: _sha256(path) for label, path in required.items()}
 
     return CaseEvidence(
@@ -355,10 +349,13 @@ def _markdown_report(cases: list[CaseEvidence]) -> str:
     lines = [
         "# Hephaestus structural evidence",
         "",
-        "This report contains compiler and RTL-level evidence only. It does not claim post-synthesis ",
-        "PPA, post-layout extraction, or measured silicon.",
+        "This report contains compiler and RTL-level evidence only.",
+        "It does not claim post-synthesis PPA, post-layout extraction, or measured silicon.",
         "",
-        "| Case | Shape | Nonzero | Naive adders | Compiled adders | Saved | Max depth | Max fanout | Runtime weight reads | Bit-exact |",
+        (
+            "| Case | Shape | Nonzero | Naive adders | Compiled adders | Saved | "
+            "Max depth | Max fanout | Runtime weight reads | Bit-exact |"
+        ),
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
     for case in cases:
