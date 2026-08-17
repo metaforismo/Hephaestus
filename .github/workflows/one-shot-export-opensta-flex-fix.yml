@@ -1,0 +1,67 @@
+name: One-shot export patched OpenSTA workflow
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'research/opensta-sdc-probe'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/opensta-sdc-probe
+      - name: Generate the patched workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/opensta-sdc-probe.yml')
+          text = source.read_text(encoding='utf-8')
+          lines = text.splitlines(keepends=True)
+          slash = chr(92)
+
+          flex_argument = '            -DFLEX_INCLUDE_DIR=/usr/include ' + slash + '\n'
+          if flex_argument not in lines:
+              cudd_argument = (
+                  '            -DCUDD_DIR="$root/cudd-3.0.0" ' + slash + '\n'
+              )
+              cudd_index = lines.index(cudd_argument)
+              lines.insert(cudd_index + 1, flex_argument)
+
+          flex_check = '          test -f /usr/include/FlexLexer.h\n'
+          if flex_check not in lines:
+              start = next(
+                  index
+                  for index, line in enumerate(lines)
+                  if 'rev-parse HEAD' in line
+              )
+              cmake_index = next(
+                  index
+                  for index in range(start + 1, len(lines))
+                  if lines[index].rstrip('\n') == '          cmake ' + slash
+              )
+              lines[cmake_index:cmake_index] = [
+                  flex_check,
+                  '          sha256sum /usr/include/FlexLexer.h ' + slash + '\n',
+                  '            | tee "$root/flex-header.sha256.txt"\n',
+                  '\n',
+              ]
+
+          output = Path('export/opensta-sdc-probe.yml')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(''.join(lines), encoding='utf-8')
+          PY
+          grep -F -- '-DFLEX_INCLUDE_DIR=/usr/include' \
+            export/opensta-sdc-probe.yml
+          grep -F -- 'test -f /usr/include/FlexLexer.h' \
+            export/opensta-sdc-probe.yml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patched-opensta-sdc-workflow
+          path: export/opensta-sdc-probe.yml
+          if-no-files-found: error
+          retention-days: 1
