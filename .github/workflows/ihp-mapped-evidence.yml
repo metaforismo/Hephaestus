@@ -1,0 +1,150 @@
+name: IHP mapped evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/ihp-sg13g2-mapped-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mapped-area:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          mkdir -p build/ihp-mapped/tooling
+          yosys -V | tee build/ihp-mapped/tooling/yosys.version.txt
+          dpkg-query -W -f='${Package}\t${Version}\n' yosys yosys-abc iverilog \
+            | sort \
+            | tee build/ihp-mapped/tooling/packages.tsv
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint mapped evidence implementation
+        run: |
+          ruff check src/hephaestus/mapped.py tests/test_mapped.py
+          ruff format --check src/hephaestus/mapped.py tests/test_mapped.py
+      - name: Run mapped evidence unit tests
+        run: pytest tests/test_mapped.py
+      - name: Resolve and fetch the pinned Liberty file
+        id: technology
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          output = Path(__import__('os').environ['GITHUB_OUTPUT'])
+          with output.open('a', encoding='utf-8') as handle:
+              handle.write(f"url={config['source']['url']}\n")
+              handle.write(f"sha256={config['library']['sha256']}\n")
+          PY
+          mkdir -p build/ihp-mapped/input
+          curl --fail --location --retry 3 --retry-all-errors \
+            '${{ steps.technology.outputs.url }}' \
+            --output build/ihp-mapped/input/technology.lib
+          echo '${{ steps.technology.outputs.sha256 }}  build/ihp-mapped/input/technology.lib' \
+            | sha256sum --check --strict
+      - name: Build and simulate matched RTL backends
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/ihp-mapped/source \
+            --module hephaestus_ihp_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/ihp-mapped/source \
+            --out build/ihp-mapped/matched \
+            --module hephaestus_ihp \
+            --verify-vectors 256 \
+            --seed 31 \
+            --simulate
+      - name: Run repeatable IHP standard-cell mapping
+        run: |
+          python -m hephaestus.mapped build/ihp-mapped/matched \
+            --technology configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/ihp-mapped/input/technology.lib \
+            --out build/ihp-mapped/evidence \
+            --verify-repeatability \
+            --timeout 300
+      - name: Validate mapped evidence and claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('build/ihp-mapped/evidence')
+          evidence = json.loads(
+              (root / 'mapped_evidence.json').read_text(encoding='utf-8')
+          )
+          assert evidence['evidence_level'] == (
+              'standard_cell_mapped_area_estimate'
+          )
+          assert evidence['technology']['technology_id'] == (
+              'ihp-sg13g2-stdcell-typ-1p20v-25c'
+          )
+          assert evidence['technology']['library']['sha256'] == (
+              '7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['metrics']['cell_count'] > 0
+              and backend['library_area'] > 0
+              and backend['area_cross_check_passed']
+              and backend['repeatability']['passed']
+              and all(
+                  cell_type.startswith('sg13g2_')
+                  for cell_type in backend['metrics']['cell_type_histogram']
+              )
+              for backend in evidence['backends'].values()
+          )
+          shared_area = evidence['backends']['shared_dag']['library_area']
+          assert shared_area < evidence['backends']['naive_shift_add']['library_area']
+          assert shared_area < evidence['backends']['constant_multipliers']['library_area']
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'standard_cell_mapping_performed': True,
+              'mapped_netlist_structurally_checked': True,
+              'post_mapping_library_area_estimated': True,
+              'mapped_gate_level_equivalence_verified': False,
+              'timing_constrained': False,
+              'timing_analyzed': False,
+              'power_estimated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          assert (root / 'technology' / 'technology.json').is_file()
+          assert (root / 'technology' / 'technology.lib').is_file()
+          assert (root / 'SUMMARY.md').is_file()
+          PY
+      - name: Upload mapped evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-sg13g2-mapped-evidence
+          path: build/ihp-mapped
+          if-no-files-found: error
+          retention-days: 30
