@@ -50,38 +50,18 @@ jobs:
           )
           if old_load not in text or old_source not in text:
               raise SystemExit('expected synthesis source fragments were not found')
-          text = text.replace(old_load, new_load).replace(old_source, new_source)
-          path.write_text(text, encoding='utf-8')
-
-          workflow = Path('.github/workflows/synthesis-evidence.yml')
-          workflow_text = workflow.read_text(encoding='utf-8')
-          old_validation = (
-              "          assert evidence['evidence_level'] == 'generic_yosys_post_techmap'\n"
-          )
-          new_validation = (
-              "          assert evidence['evidence_level'] == 'generic_yosys_post_techmap'\n"
-              "          assert evidence['source']['matched_manifest'] == (\n"
-              "              'source_matched_manifest.json'\n"
-              "          )\n"
-              "          assert Path(\n"
-              "              'build/synthesis/evidence/source_matched_manifest.json'\n"
-              "          ).is_file()\n"
-          )
-          if old_validation not in workflow_text:
-              raise SystemExit('expected workflow validation fragment was not found')
-          workflow.write_text(
-              workflow_text.replace(old_validation, new_validation),
+          path.write_text(
+              text.replace(old_load, new_load).replace(old_source, new_source),
               encoding='utf-8',
           )
           PY
           python -m pip install 'ruff==0.16.3'
-          ruff format src/hephaestus/synthesis.py tests/test_synthesis.py
-          ruff check src/hephaestus/synthesis.py tests/test_synthesis.py
-          rm .github/workflows/patch-synthesis-source.yml
-      - name: Commit the self-contained evidence patch
+          ruff format src/hephaestus/synthesis.py
+          ruff check src/hephaestus/synthesis.py
+      - name: Commit the source-only portability patch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add src/hephaestus/synthesis.py
           git commit -m 'Make generic synthesis evidence self-contained'
           git push origin HEAD:feat/generic-yosys-evidence
