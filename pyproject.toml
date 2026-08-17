@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hephaestus-compiler"
+version = "0.1.0"
+description = "A research compiler that lowers constant neural-network matrices into zero-runtime-weight-fetch shift/add RTL."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Francesco Giannicola" }
+]
+keywords = ["asic", "compiler", "inference", "quantization", "rtl", "verilog"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+hf = [
+  "safetensors>=0.4",
+]
+dev = [
+  "pytest>=8",
+  "ruff>=0.8",
+  "safetensors>=0.4",
+]
+
+[project.scripts]
+hephaestus = "hephaestus.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/metaforismo/Hephaestus"
+Repository = "https://github.com/metaforismo/Hephaestus"
+Issues = "https://github.com/metaforismo/Hephaestus/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
