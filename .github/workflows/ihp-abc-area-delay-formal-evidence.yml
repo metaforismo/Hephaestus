@@ -1,0 +1,224 @@
+name: IHP ABC area-delay formal equivalence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/abc-area-delay-formal-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  abc-mapped-formal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis and proof tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          mkdir -p build/ihp-abc-formal/tooling
+          yosys -V | tee build/ihp-abc-formal/tooling/yosys.version.txt
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            yosys yosys-abc iverilog \
+            | sort \
+            | tee build/ihp-abc-formal/tooling/packages.tsv
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint ABC mapped-formal implementation
+        run: |
+          ruff check \
+            src/hephaestus/abc_timing_formal.py \
+            tests/test_abc_timing_formal.py
+          ruff format --check \
+            src/hephaestus/abc_timing_formal.py \
+            tests/test_abc_timing_formal.py
+      - name: Run ABC mapped-formal unit tests
+        run: pytest tests/test_abc_timing_formal.py
+      - name: Resolve the pinned technology metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/'
+                  'ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/ihp-abc-formal/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n',
+              encoding='utf-8',
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n',
+              encoding='utf-8',
+          )
+          PY
+      - name: Fetch and verify the exact IHP Liberty file
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/ihp-abc-formal/input/url.txt)" \
+            --output build/ihp-abc-formal/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/ihp-abc-formal/input/sha256.txt)" \
+            build/ihp-abc-formal/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Rebuild the matched ABC area-delay source bundle
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/ihp-abc-formal/source \
+            --module hephaestus_abc_area_delay_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/ihp-abc-formal/source \
+            --out build/ihp-abc-formal/matched \
+            --module hephaestus_abc_area_delay \
+            --verify-vectors 256 \
+            --seed 43 \
+            --simulate
+          python -m hephaestus.abc_timing build/ihp-abc-formal/matched \
+            --technology \
+              configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/ihp-abc-formal/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/ihp-abc-formal/area-delay \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prove every distinct ABC-mapped netlist
+        run: |
+          python -m hephaestus.abc_timing_formal \
+            build/ihp-abc-formal/area-delay \
+            --codes build/ihp-abc-formal/source/codes.npy \
+            --out build/ihp-abc-formal/formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Validate the regression reference and claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence = json.loads(
+              Path(
+                  'build/ihp-abc-formal/formal/'
+                  'abc_area_delay_formal_evidence.json'
+              ).read_text(encoding='utf-8')
+          )
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/'
+                  'ihp_sg13g2_abc_area_delay_formal_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+
+          assert evidence['schema'] == (
+              'hephaestus.abc-area-delay-formal-evidence.v1'
+          )
+          assert evidence['evidence_level'] == (
+              'yosys_sat_abc_area_delay_mapped_equivalence'
+          )
+          assert reference['schema'] == (
+              'hephaestus.abc-area-delay-formal-reference.v1'
+          )
+          assert evidence['scope']['input_bits'] == 48
+          assert evidence['scope']['output_bits'] == 48
+          assert evidence['scope']['source_sweep_runs'] == 18
+          assert evidence['scope']['unique_mapped_netlists_proved'] == 6
+          assert evidence['technology']['technology_id'] == (
+              reference['technology']['technology_id']
+          )
+          assert evidence['technology']['liberty']['sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          assert set(evidence['backends']) == set(reference['expected'])
+
+          for backend_name, expected in reference['expected'].items():
+              backend = evidence['backends'][backend_name]
+              assert backend['pareto_labels'] == expected['pareto_labels']
+              assert set(backend['runs']) == set(expected['runs'])
+              assert set(backend['proofs']) == set(expected['proof_groups'])
+              assert backend['all_sweep_runs_covered']
+              assert backend['all_pareto_runs_covered']
+
+              for representative, group in expected[
+                  'proof_groups'
+              ].items():
+                  proof = backend['proofs'][representative]
+                  assert proof['mapped_verilog_sha256'] == group['sha256']
+                  assert proof['covered_labels'] == group['labels']
+                  assert proof['proof']['passed']
+                  assert proof['proof']['proof_success']
+                  assert not proof['proof']['counterexample_found']
+                  assert not proof['proof']['unsupported_cell_error']
+
+              for label, run_expected in expected['runs'].items():
+                  run = backend['runs'][label]
+                  assert run['mapped_verilog_sha256'] == (
+                      run_expected['sha256']
+                  )
+                  assert run['proof_representative'] == (
+                      run_expected['proof_representative']
+                  )
+                  assert run['equivalence_verified']
+
+          negative = evidence['negative_control']
+          assert negative['backend'] == 'shared_dag'
+          assert negative['proof']['passed']
+          assert negative['proof']['counterexample_found']
+          assert not negative['proof']['proof_success']
+          assert not negative['proof']['unsupported_cell_error']
+
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'abc_area_delay_source_evidence_verified': True,
+              'technology_aware_abc_mapping_performed': True,
+              'mapped_netlist_structurally_checked': True,
+              'liberty_functional_models_verified': True,
+              'all_abc_sweep_mapped_netlists_equivalent': True,
+              'all_pareto_mapped_netlists_equivalent': True,
+              'mapped_gate_level_equivalence_verified': True,
+              'exhaustive_combinational_equivalence_verified': True,
+              'negative_control_counterexample_found': True,
+              'abc_internal_timing_estimated': True,
+              'sequential_equivalence_verified': False,
+              'four_state_equivalence_verified': False,
+              'signoff_sta_performed': False,
+              'sdc_timing_analyzed': False,
+              'timing_closed': False,
+              'power_estimated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+
+          root = Path('build/ihp-abc-formal/formal')
+          assert (root / 'SUMMARY.md').is_file()
+          assert (root / 'source_abc_area_delay_evidence.json').is_file()
+          assert (root / 'source_matched_manifest.json').is_file()
+          assert (root / 'source_codes.npy').is_file()
+          assert (root / 'technology' / 'technology.lib').is_file()
+          assert (root / 'reference.sv').is_file()
+          PY
+      - name: Upload ABC mapped-formal evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-abc-area-delay-formal-evidence
+          path: build/ihp-abc-formal
+          if-no-files-found: error
+          retention-days: 30
