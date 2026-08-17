@@ -1,0 +1,51 @@
+name: One-shot OpenSTA Flex include fix
+
+on:
+  push:
+    branches:
+      - research/opensta-sdc-probe
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/opensta-sdc-probe
+      - name: Pin the Flex include directory explicitly
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/opensta-sdc-probe.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '''          cmake \\
+            -S "$root/OpenSTA" \\
+            -B "$root/OpenSTA/build" \\
+            -DCMAKE_BUILD_TYPE=Release \\
+            -DCUDD_DIR="$root/cudd-3.0.0" \\
+'''
+          new = '''          test -f /usr/include/FlexLexer.h
+          sha256sum /usr/include/FlexLexer.h \\
+            | tee "$root/flex-header.sha256.txt"
+
+          cmake \\
+            -S "$root/OpenSTA" \\
+            -B "$root/OpenSTA/build" \\
+            -DCMAKE_BUILD_TYPE=Release \\
+            -DCUDD_DIR="$root/cudd-3.0.0" \\
+            -DFLEX_INCLUDE_DIR=/usr/include \\
+'''
+          if old not in text:
+              raise SystemExit('OpenSTA CMake block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/opensta-sdc-probe.yml
+          git commit -m 'Pin the OpenSTA Flex include directory'
+          git push origin HEAD:research/opensta-sdc-probe
