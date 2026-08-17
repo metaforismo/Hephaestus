@@ -1,0 +1,60 @@
+{
+  "schema": "hephaestus.mapped-formal-reference.v1",
+  "reference_id": "ihp-sg13g2-tiny-mapped-formal-v1",
+  "case": {
+    "source": "examples/tiny_weights.json",
+    "domain": "quantized_integer_core_before_row_scaling",
+    "input_bits": 48,
+    "output_bits": 48,
+    "combinational": true,
+    "sequential_depth": 0
+  },
+  "technology": {
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396"
+  },
+  "expected_backends": {
+    "shared_dag": {
+      "mapped_cell_count": 492,
+      "proof_success": true,
+      "counterexample_found": false,
+      "unsupported_cell_error": false
+    },
+    "naive_shift_add": {
+      "mapped_cell_count": 574,
+      "proof_success": true,
+      "counterexample_found": false,
+      "unsupported_cell_error": false
+    },
+    "constant_multipliers": {
+      "mapped_cell_count": 574,
+      "proof_success": true,
+      "counterexample_found": false,
+      "unsupported_cell_error": false
+    }
+  },
+  "negative_control": {
+    "backend": "shared_dag",
+    "fault": "xor output bit 0 with input bit 0",
+    "proof_success": false,
+    "counterexample_found": true,
+    "unsupported_cell_error": false
+  },
+  "first_verified_probe": {
+    "workflow_run": 32067465162,
+    "head_sha": "fffe0090c1bb2e140a694141c2939610be2470f9",
+    "artifact_sha256": "227b0b4244ba0e78bacccca847f6f97159eb5138e000a1e7146a288eb9f0112f"
+  },
+  "claim_boundary": {
+    "mapped_gate_level_equivalence_verified": true,
+    "exhaustive_combinational_equivalence_verified": true,
+    "negative_control_counterexample_found": true,
+    "sequential_equivalence_verified": false,
+    "timing_analyzed": false,
+    "power_estimated": false,
+    "placement_performed": false,
+    "routing_performed": false,
+    "post_layout_pex_verified": false,
+    "silicon_verified": false
+  }
+}
