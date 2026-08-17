@@ -131,6 +131,8 @@ logical, and physical co-design:
 
 See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Roadmap](docs/ROADMAP.md), [Benchmarking](docs/BENCHMARKING.md),
+[Structural evidence](docs/EVIDENCE.md), [Matched RTL baselines](docs/MATCHED_BASELINES.md),
+[Generic Yosys evidence](docs/SYNTHESIS_EVIDENCE.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 

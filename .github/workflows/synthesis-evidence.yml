@@ -1,0 +1,97 @@
+name: Synthesis evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/generic-yosys-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  generic-yosys:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install RTL tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog yosys
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint synthesis evidence implementation
+        run: |
+          ruff check src/hephaestus/synthesis.py tests/test_synthesis.py
+          ruff format --check src/hephaestus/synthesis.py tests/test_synthesis.py
+      - name: Run synthesis evidence tests
+        run: pytest tests/test_synthesis.py
+      - name: Compile and verify matched RTL backends
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/synthesis/source \
+            --module hephaestus_synthesis_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/synthesis/source \
+            --out build/synthesis/matched \
+            --module hephaestus_synthesis \
+            --verify-vectors 256 \
+            --seed 23 \
+            --simulate
+      - name: Run repeatable generic Yosys synthesis
+        run: |
+          python -m hephaestus.synthesis build/synthesis/matched \
+            --out build/synthesis/evidence \
+            --verify-repeatability
+      - name: Validate generic synthesis claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence = json.loads(
+              Path('build/synthesis/evidence/synthesis_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert evidence['evidence_level'] == 'generic_yosys_post_techmap'
+          assert evidence['source']['matched_manifest'] == (
+              'source_matched_manifest.json'
+          )
+          assert Path(
+              'build/synthesis/evidence/source_matched_manifest.json'
+          ).is_file()
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['repeatability']['passed']
+              and backend['artifacts']['post_techmap_netlist']['sha256']
+              and backend['post_techmap']['cell_count'] >= 0
+              for backend in evidence['backends'].values()
+          )
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'generic_yosys_synthesis_completed': True,
+              'standard_cell_mapping_performed': False,
+              'timing_constrained': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          PY
+      - name: Upload generic synthesis evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-generic-yosys-evidence
+          path: build/synthesis
+          if-no-files-found: error
+          retention-days: 30
