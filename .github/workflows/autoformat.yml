@@ -25,6 +25,24 @@ jobs:
         run: |
           ruff check --fix . || true
           ruff format .
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/hephaestus/lower.py')
+          text = path.read_text(encoding='utf-8')
+          old = (
+              '            f"accumulator_width={chosen_width} is unsafe; '
+              'at least {minimum_width} bits are required"\n'
+          )
+          new = (
+              '            f"accumulator_width={chosen_width} is unsafe; "\n'
+              '            f"at least {minimum_width} bits are required"\n'
+          )
+          if old not in text:
+              raise SystemExit('expected long diagnostic string was not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          ruff format .
           ruff check .
           rm .github/workflows/autoformat.yml
       - name: Commit fixes and remove temporary workflow
