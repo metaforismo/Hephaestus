@@ -61,6 +61,12 @@ jobs:
               )
           )
           assert evidence['evidence_level'] == 'generic_yosys_post_techmap'
+          assert evidence['source']['matched_manifest'] == (
+              'source_matched_manifest.json'
+          )
+          assert Path(
+              'build/synthesis/evidence/source_matched_manifest.json'
+          ).is_file()
           assert set(evidence['backends']) == {
               'shared_dag',
               'naive_shift_add',
