@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 import shutil
@@ -92,9 +91,7 @@ def _repeatability_verified(run: dict[str, Any], *, context: str) -> None:
             f"{context}.repeatability.byte_identical_artifacts is malformed"
         )
     if any(value is not True for value in byte_identical.values()):
-        raise AbcAreaDelayFormalError(
-            f"{context} contains a non-identical repeatability artifact"
-        )
+        raise AbcAreaDelayFormalError(f"{context} contains a non-identical repeatability artifact")
     if repeatability.get("normalized_metrics_identical") is not True:
         raise AbcAreaDelayFormalError(f"{context} repeatability metrics are not identical")
 
@@ -200,9 +197,7 @@ def build_abc_area_delay_formal_evidence(
 
     area_delay_path = bundle / "abc_area_delay_evidence.json"
     if not area_delay_path.is_file():
-        raise AbcAreaDelayFormalError(
-            f"ABC area-delay bundle is missing {area_delay_path.name}"
-        )
+        raise AbcAreaDelayFormalError(f"ABC area-delay bundle is missing {area_delay_path.name}")
     source_manifest = _load_json(area_delay_path)
     if source_manifest.get("schema") != "hephaestus.abc-area-delay-evidence.v1":
         raise AbcAreaDelayFormalError("unsupported ABC area-delay evidence schema")
@@ -232,9 +227,10 @@ def build_abc_area_delay_formal_evidence(
     if matched_manifest.get("schema") != "hephaestus.matched-baselines.v1":
         raise AbcAreaDelayFormalError("unsupported matched-baseline manifest schema")
     matched_claims = matched_manifest.get("claims")
-    if not isinstance(matched_claims, dict) or matched_claims.get(
-        "matched_integer_contract_verified"
-    ) is not True:
+    if (
+        not isinstance(matched_claims, dict)
+        or matched_claims.get("matched_integer_contract_verified") is not True
+    ):
         raise AbcAreaDelayFormalError("source matched integer contract is not verified")
 
     source_contract = source_manifest.get("contract")
@@ -269,16 +265,13 @@ def build_abc_area_delay_formal_evidence(
             "ABC area-delay formal evidence requires a combinational contract"
         )
     if source_contract.get("latency_cycles") != 0:
-        raise AbcAreaDelayFormalError(
-            "ABC area-delay formal evidence requires zero-cycle latency"
-        )
+        raise AbcAreaDelayFormalError("ABC area-delay formal evidence requires zero-cycle latency")
 
     input_bits = input_count * input_width
     output_bits = output_count * accumulator_width
     if input_bits > max_input_bits:
         raise AbcAreaDelayFormalError(
-            f"formal input width {input_bits} exceeds the configured limit of "
-            f"{max_input_bits} bits"
+            f"formal input width {input_bits} exceeds the configured limit of {max_input_bits} bits"
         )
 
     if not source_codes.is_file():
@@ -291,14 +284,11 @@ def build_abc_area_delay_formal_evidence(
         not isinstance(expected_codes_digest, str)
         or sha256_file(source_codes) != expected_codes_digest
     ):
-        raise AbcAreaDelayFormalError(
-            "source codes do not match the matched-baseline manifest"
-        )
+        raise AbcAreaDelayFormalError("source codes do not match the matched-baseline manifest")
     codes = _load_codes(source_codes)
     if codes.shape != (output_count, input_count):
         raise AbcAreaDelayFormalError(
-            f"codes shape {codes.shape} does not match "
-            f"({output_count}, {input_count})"
+            f"codes shape {codes.shape} does not match ({output_count}, {input_count})"
         )
     minimum_width = required_accumulator_width(codes, input_width)
     if accumulator_width < minimum_width:
@@ -328,13 +318,9 @@ def build_abc_area_delay_formal_evidence(
     if not isinstance(technology_library, dict):
         raise AbcAreaDelayFormalError("technology library metadata is malformed")
     if liberty_metadata["sha256"] != technology_library.get("sha256"):
-        raise AbcAreaDelayFormalError(
-            "proof Liberty digest differs from ABC area-delay evidence"
-        )
+        raise AbcAreaDelayFormalError("proof Liberty digest differs from ABC area-delay evidence")
     if liberty_metadata["library"] != technology_library.get("name"):
-        raise AbcAreaDelayFormalError(
-            "proof Liberty name differs from ABC area-delay evidence"
-        )
+        raise AbcAreaDelayFormalError("proof Liberty name differs from ABC area-delay evidence")
 
     technology_config = _load_json(technology_config_source)
     if not isinstance(technology_config, dict):
@@ -342,15 +328,11 @@ def build_abc_area_delay_formal_evidence(
     if technology_config.get("schema") != "hephaestus.technology.v1":
         raise AbcAreaDelayFormalError("unsupported technology configuration schema")
     if technology_config.get("technology_id") != technology_id:
-        raise AbcAreaDelayFormalError(
-            "technology configuration ID differs from source evidence"
-        )
+        raise AbcAreaDelayFormalError("technology configuration ID differs from source evidence")
 
     configuration = source_manifest.get("configuration")
     if not isinstance(configuration, dict):
-        raise AbcAreaDelayFormalError(
-            "ABC area-delay configuration metadata is malformed"
-        )
+        raise AbcAreaDelayFormalError("ABC area-delay configuration metadata is malformed")
     evidence_config_source = _resolve_hashed_artifact(
         bundle,
         configuration.get("artifact"),
@@ -396,15 +378,11 @@ def build_abc_area_delay_formal_evidence(
     source_backends = source_manifest.get("backends")
     matched_backends = matched_manifest.get("backends")
     if not isinstance(source_backends, dict) or not source_backends:
-        raise AbcAreaDelayFormalError(
-            "ABC area-delay evidence does not contain backends"
-        )
+        raise AbcAreaDelayFormalError("ABC area-delay evidence does not contain backends")
     if not isinstance(matched_backends, dict) or not matched_backends:
         raise AbcAreaDelayFormalError("matched manifest does not contain backends")
     if set(source_backends) != set(matched_backends):
-        raise AbcAreaDelayFormalError(
-            "ABC area-delay and matched backend sets differ"
-        )
+        raise AbcAreaDelayFormalError("ABC area-delay and matched backend sets differ")
 
     resolved_backends: dict[str, dict[str, Any]] = {}
     total_sweep_runs = 0
@@ -413,9 +391,7 @@ def build_abc_area_delay_formal_evidence(
         backend = source_backends[backend_name]
         matched_backend = matched_backends[backend_name]
         if not isinstance(backend, dict) or not isinstance(matched_backend, dict):
-            raise AbcAreaDelayFormalError(
-                f"backend {backend_name!r} metadata is malformed"
-            )
+            raise AbcAreaDelayFormalError(f"backend {backend_name!r} metadata is malformed")
         module = backend.get("module")
         if not isinstance(module, str) or module != matched_backend.get("module"):
             raise AbcAreaDelayFormalError(
@@ -425,15 +401,11 @@ def build_abc_area_delay_formal_evidence(
         raw_runs = backend.get("runs")
         raw_pareto = backend.get("pareto_labels")
         if not isinstance(raw_runs, dict) or not raw_runs:
-            raise AbcAreaDelayFormalError(
-                f"backend {backend_name!r} has no sweep runs"
-            )
+            raise AbcAreaDelayFormalError(f"backend {backend_name!r} has no sweep runs")
         if not isinstance(raw_pareto, list) or any(
             not isinstance(label, str) for label in raw_pareto
         ):
-            raise AbcAreaDelayFormalError(
-                f"backend {backend_name!r} Pareto labels are malformed"
-            )
+            raise AbcAreaDelayFormalError(f"backend {backend_name!r} Pareto labels are malformed")
         pareto_labels = [
             _safe_label(label, context=f"backends.{backend_name}.pareto_labels")
             for label in raw_pareto
@@ -450,17 +422,14 @@ def build_abc_area_delay_formal_evidence(
                 context=f"backends.{backend_name}.runs",
             )
             if not isinstance(raw_run, dict):
-                raise AbcAreaDelayFormalError(
-                    f"run {backend_name!r}/{safe_label!r} is malformed"
-                )
+                raise AbcAreaDelayFormalError(f"run {backend_name!r}/{safe_label!r} is malformed")
             if raw_run.get("area_cross_check_passed") is not True:
                 raise AbcAreaDelayFormalError(
                     f"run {backend_name!r}/{safe_label!r} failed its area cross-check"
                 )
             if raw_run.get("structural_check") != "yosys check -assert":
                 raise AbcAreaDelayFormalError(
-                    f"run {backend_name!r}/{safe_label!r} lacks a fail-closed "
-                    "structural check"
+                    f"run {backend_name!r}/{safe_label!r} lacks a fail-closed structural check"
                 )
             _repeatability_verified(
                 raw_run,
@@ -480,9 +449,7 @@ def build_abc_area_delay_formal_evidence(
                 raise AbcAreaDelayFormalError(
                     f"run {backend_name!r}/{safe_label!r} metrics are malformed"
                 )
-            if metrics.get("input_bits") != input_bits or metrics.get(
-                "output_bits"
-            ) != output_bits:
+            if metrics.get("input_bits") != input_bits or metrics.get("output_bits") != output_bits:
                 raise AbcAreaDelayFormalError(
                     f"run {backend_name!r}/{safe_label!r} widths differ from contract"
                 )
@@ -492,10 +459,7 @@ def build_abc_area_delay_formal_evidence(
                     f"run {backend_name!r}/{safe_label!r} has no cell histogram"
                 )
             if any(
-                not isinstance(cell, str)
-                or not cell
-                or type(count) is not int
-                or count <= 0
+                not isinstance(cell, str) or not cell or type(count) is not int or count <= 0
                 for cell, count in histogram.items()
             ):
                 raise AbcAreaDelayFormalError(
@@ -525,10 +489,7 @@ def build_abc_area_delay_formal_evidence(
             mapped_verilog = _resolve_hashed_artifact(
                 bundle,
                 artifacts.get("mapped_verilog"),
-                context=(
-                    f"backends.{backend_name}.runs.{safe_label}."
-                    "artifacts.mapped_verilog"
-                ),
+                context=(f"backends.{backend_name}.runs.{safe_label}.artifacts.mapped_verilog"),
             )
             runs[safe_label] = {
                 "target_picoseconds": raw_run.get("target_picoseconds"),
@@ -569,9 +530,7 @@ def build_abc_area_delay_formal_evidence(
 
         for proof_index, representative in enumerate(sorted(backend["aliases"])):
             run = runs[representative]
-            miter_module = (
-                f"hephaestus_abc_formal_b{backend_index}_p{proof_index}_miter"
-            )
+            miter_module = f"hephaestus_abc_formal_b{backend_index}_p{proof_index}_miter"
             result = _run_sat(
                 source_rtl=run["mapped_verilog"],
                 reference_rtl=reference_path,
@@ -591,11 +550,7 @@ def build_abc_area_delay_formal_evidence(
             proofs[representative] = {
                 "mapped_verilog_sha256": run["mapped_verilog_sha256"],
                 "covered_labels": backend["aliases"][representative],
-                "proof": {
-                    key: value
-                    for key, value in result.items()
-                    if key != "artifacts"
-                },
+                "proof": {key: value for key, value in result.items() if key != "artifacts"},
                 "artifacts": _artifact_manifest(output, result["artifacts"]),
             }
             unique_proofs += 1
@@ -607,9 +562,7 @@ def build_abc_area_delay_formal_evidence(
                 "target_picoseconds": run["target_picoseconds"],
                 "target_met": run["target_met"],
                 "library_area": run["library_area"],
-                "critical_path_delay_picoseconds": (
-                    run["critical_path_delay_picoseconds"]
-                ),
+                "critical_path_delay_picoseconds": (run["critical_path_delay_picoseconds"]),
                 "mapped_cell_count": run["mapped_cell_count"],
                 "mapped_verilog_sha256": run["mapped_verilog_sha256"],
                 "proof_representative": representative,
@@ -622,11 +575,8 @@ def build_abc_area_delay_formal_evidence(
             "pareto_labels": backend["pareto_labels"],
             "runs": run_evidence,
             "proofs": proofs,
-            "all_sweep_runs_covered": set(run_evidence)
-            == set(backend["representative_for_label"]),
-            "all_pareto_runs_covered": set(backend["pareto_labels"]).issubset(
-                run_evidence
-            ),
+            "all_sweep_runs_covered": set(run_evidence) == set(backend["representative_for_label"]),
+            "all_pareto_runs_covered": set(backend["pareto_labels"]).issubset(run_evidence),
         }
 
     negative_backend = (
@@ -729,9 +679,7 @@ def build_abc_area_delay_formal_evidence(
                 miter_module="TOP",
                 expect_counterexample=False,
             ).replace("-top TOP", "-top <miter>"),
-            "liberty_mode": (
-                "functional models loaded with read_liberty -ignore_miss_func"
-            ),
+            "liberty_mode": ("functional models loaded with read_liberty -ignore_miss_func"),
             "structural_check": "yosys check -assert",
             "proof_engine": "yosys sat",
         },
@@ -741,11 +689,7 @@ def build_abc_area_delay_formal_evidence(
             "source_label": preferred_negative,
             "mapped_verilog_sha256": negative_run["mapped_verilog_sha256"],
             "fault": "xor output bit 0 with input bit 0",
-            "proof": {
-                key: value
-                for key, value in negative_result.items()
-                if key != "artifacts"
-            },
+            "proof": {key: value for key, value in negative_result.items() if key != "artifacts"},
             "artifacts": _artifact_manifest(output, negative_result["artifacts"]),
         },
         "claims": {
@@ -759,9 +703,7 @@ def build_abc_area_delay_formal_evidence(
             "mapped_gate_level_equivalence_verified": True,
             "exhaustive_combinational_equivalence_verified": True,
             "negative_control_counterexample_found": True,
-            "abc_internal_timing_estimated": source_claims[
-                "abc_internal_timing_estimated"
-            ],
+            "abc_internal_timing_estimated": source_claims["abc_internal_timing_estimated"],
             "sequential_equivalence_verified": False,
             "four_state_equivalence_verified": False,
             "signoff_sta_performed": False,
