@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -37,27 +36,21 @@ def _load_json(path: Path) -> Any:
 
 def _validate_module_name(module: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", module) is None:
-        raise MappedSynthesisError(
-            f"unsafe or unsupported SystemVerilog module name: {module!r}"
-        )
+        raise MappedSynthesisError(f"unsafe or unsupported SystemVerilog module name: {module!r}")
     return module
 
 
 def _resolve_bundle_artifact(bundle_dir: Path, raw_path: str) -> Path:
     relative = Path(raw_path)
     if relative.is_absolute():
-        raise MappedSynthesisError(
-            f"bundle artifact path must be relative: {raw_path!r}"
-        )
+        raise MappedSynthesisError(f"bundle artifact path must be relative: {raw_path!r}")
 
     root = bundle_dir.resolve()
     resolved = (root / relative).resolve()
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise MappedSynthesisError(
-            f"bundle artifact escapes its root: {raw_path!r}"
-        ) from exc
+        raise MappedSynthesisError(f"bundle artifact escapes its root: {raw_path!r}") from exc
     if not resolved.is_file():
         raise MappedSynthesisError(f"bundle artifact does not exist: {resolved}")
     return resolved
@@ -70,9 +63,7 @@ def _resolve_executable(requested: str) -> str:
         if candidate.is_file():
             resolved = str(candidate.resolve())
     if resolved is None:
-        raise MappedSynthesisError(
-            f"Yosys executable was not found: {requested!r}"
-        )
+        raise MappedSynthesisError(f"Yosys executable was not found: {requested!r}")
     return resolved
 
 
@@ -86,9 +77,7 @@ def _tool_version(executable: str) -> str:
     )
     output = (completed.stdout + completed.stderr).strip()
     if completed.returncode != 0 or not output:
-        raise MappedSynthesisError(
-            f"cannot identify Yosys version using {executable!r}"
-        )
+        raise MappedSynthesisError(f"cannot identify Yosys version using {executable!r}")
     return output.splitlines()[0]
 
 
@@ -132,9 +121,7 @@ def _load_technology_config(path: Path) -> dict[str, Any]:
     _required_string(library, "area_unit", "technology.library")
     sha256 = _required_string(library, "sha256", "technology.library")
     if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
-        raise MappedSynthesisError(
-            "technology.library.sha256 must be a lowercase SHA-256 digest"
-        )
+        raise MappedSynthesisError("technology.library.sha256 must be a lowercase SHA-256 digest")
     byte_count = library.get("bytes")
     if type(byte_count) is not int or byte_count <= 0:
         raise MappedSynthesisError("technology.library.bytes must be a positive integer")
@@ -145,9 +132,7 @@ def _load_technology_config(path: Path) -> dict[str, Any]:
         _required_string(source, key, "technology.source")
     commit = str(source["commit"])
     if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
-        raise MappedSynthesisError(
-            "technology.source.commit must be a full lowercase Git commit"
-        )
+        raise MappedSynthesisError("technology.source.commit must be a full lowercase Git commit")
     _required_string(flow, "mapper", "technology.flow")
     if flow.get("physical_design") is not False:
         raise MappedSynthesisError(
@@ -190,14 +175,10 @@ def _inspect_liberty(path: Path) -> tuple[dict[str, Any], dict[str, float]]:
             re.MULTILINE,
         )
         if area_match is None:
-            raise MappedSynthesisError(
-                f"Liberty cell {match.group(1)!r} does not declare an area"
-            )
+            raise MappedSynthesisError(f"Liberty cell {match.group(1)!r} does not declare an area")
         area = float(area_match.group(1))
         if not math.isfinite(area) or area < 0:
-            raise MappedSynthesisError(
-                f"Liberty cell {match.group(1)!r} has an invalid area"
-            )
+            raise MappedSynthesisError(f"Liberty cell {match.group(1)!r} has an invalid area")
         cell_areas[match.group(1)] = area
 
     try:
@@ -339,8 +320,7 @@ def _run_mapping(
     missing = [label for label, path in artifacts.items() if not path.is_file()]
     if missing:
         raise MappedSynthesisError(
-            f"Yosys did not produce required mapped artifacts for {run_dir.name!r}: "
-            f"{missing}"
+            f"Yosys did not produce required mapped artifacts for {run_dir.name!r}: {missing}"
         )
 
     netlist = _load_json(artifacts["mapped_netlist"])
@@ -395,18 +375,14 @@ def _verify_repeatability(
     )
     compared = ("mapped_netlist", "mapped_verilog", "mapped_stat")
     byte_identical = {
-        label: sha256_file(first_run["artifacts"][label])
-        == sha256_file(second["artifacts"][label])
+        label: sha256_file(first_run["artifacts"][label]) == sha256_file(second["artifacts"][label])
         for label in compared
     }
-    normalized_match = (
-        first_run["metrics"] == second["metrics"]
-        and math.isclose(
-            first_run["library_area"],
-            second["library_area"],
-            rel_tol=0,
-            abs_tol=1e-12,
-        )
+    normalized_match = first_run["metrics"] == second["metrics"] and math.isclose(
+        first_run["library_area"],
+        second["library_area"],
+        rel_tol=0,
+        abs_tol=1e-12,
     )
     passed = all(byte_identical.values()) and normalized_match
     if not passed:
@@ -500,9 +476,7 @@ def build_mapped_synthesis_evidence(
 
     matched_manifest_path = bundle / "matched_manifest.json"
     if not matched_manifest_path.is_file():
-        raise MappedSynthesisError(
-            f"matched bundle is missing {matched_manifest_path.name}"
-        )
+        raise MappedSynthesisError(f"matched bundle is missing {matched_manifest_path.name}")
     matched_manifest = _load_json(matched_manifest_path)
     if matched_manifest.get("schema") != "hephaestus.matched-baselines.v1":
         raise MappedSynthesisError("unsupported matched-baseline manifest schema")
@@ -528,9 +502,7 @@ def build_mapped_synthesis_evidence(
 
     backend_specs = matched_manifest.get("backends")
     if not isinstance(backend_specs, dict) or not backend_specs:
-        raise MappedSynthesisError(
-            "matched manifest does not contain backend specifications"
-        )
+        raise MappedSynthesisError("matched manifest does not contain backend specifications")
     expected_hashes = matched_manifest.get("artifact_sha256", {})
     if not isinstance(expected_hashes, dict):
         raise MappedSynthesisError("matched manifest artifact hashes are malformed")
@@ -545,15 +517,11 @@ def build_mapped_synthesis_evidence(
     for backend_name in sorted(backend_specs):
         specification = backend_specs[backend_name]
         if not isinstance(specification, dict):
-            raise MappedSynthesisError(
-                f"backend specification {backend_name!r} is malformed"
-            )
+            raise MappedSynthesisError(f"backend specification {backend_name!r} is malformed")
         module = _validate_module_name(str(specification.get("module", "")))
         rtl_value = specification.get("rtl")
         if not isinstance(rtl_value, str) or not rtl_value:
-            raise MappedSynthesisError(
-                f"backend {backend_name!r} does not identify its RTL"
-            )
+            raise MappedSynthesisError(f"backend {backend_name!r} does not identify its RTL")
         source_rtl = _resolve_bundle_artifact(bundle, rtl_value)
 
         hash_label = _EXPECTED_BACKEND_HASH_LABELS.get(backend_name)
@@ -578,9 +546,9 @@ def build_mapped_synthesis_evidence(
             raise MappedSynthesisError(
                 f"mapped backend {backend_name!r} input width differs from the contract"
             )
-        if result["metrics"]["output_bits"] != contract.get(
-            "output_count", 0
-        ) * contract.get("accumulator_width", 0):
+        if result["metrics"]["output_bits"] != contract.get("output_count", 0) * contract.get(
+            "accumulator_width", 0
+        ):
             raise MappedSynthesisError(
                 f"mapped backend {backend_name!r} output width differs from the contract"
             )
