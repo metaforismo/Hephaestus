@@ -70,8 +70,7 @@ def emit_systemverilog(plan: CompilationPlan, *, module_name: str) -> str:
             lines.append(f"  assign sx_{index} = x_{index};")
         else:
             lines.append(
-                f"  assign sx_{index} = "
-                f"{{{{{extension}{{x_{index}[INPUT_WIDTH-1]}}}}, x_{index}}};"
+                f"  assign sx_{index} = {{{{{extension}{{x_{index}[INPUT_WIDTH-1]}}}}, x_{index}}};"
             )
     lines.append("")
 
@@ -91,10 +90,7 @@ def emit_systemverilog(plan: CompilationPlan, *, module_name: str) -> str:
         lines.extend(
             [
                 f"  wire signed [{plan.accumulator_width - 1}:0] n_{node.node_id:06d};",
-                (
-                    f"  assign n_{node.node_id:06d} = "
-                    f"{_ref_name(node.lhs)} + {_ref_name(node.rhs)};"
-                ),
+                (f"  assign n_{node.node_id:06d} = {_ref_name(node.lhs)} + {_ref_name(node.rhs)};"),
             ]
         )
     if plan.nodes:
@@ -103,8 +99,7 @@ def emit_systemverilog(plan: CompilationPlan, *, module_name: str) -> str:
     for output_index, output in enumerate(plan.outputs):
         expression = "{ACC_WIDTH{1'b0}}" if output is None else _ref_name(output)
         lines.append(
-            f"  assign y_flat[{output_index * plan.accumulator_width} +: ACC_WIDTH] = "
-            f"{expression};"
+            f"  assign y_flat[{output_index * plan.accumulator_width} +: ACC_WIDTH] = {expression};"
         )
 
     lines.extend(["", "endmodule", ""])

@@ -238,7 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compile_parser.add_argument("--out", default="build/hephaestus", help="artifact directory")
     compile_parser.add_argument("--module", help="generated SystemVerilog module name")
-    compile_parser.add_argument("--bits", type=_positive_int, default=3, help="codebook index budget")
+    compile_parser.add_argument(
+        "--bits", type=_positive_int, default=3, help="codebook index budget"
+    )
     compile_parser.add_argument("--max-shift", type=_nonnegative_int)
     compile_parser.add_argument("--input-width", type=_positive_int, default=8)
     compile_parser.add_argument("--accumulator-width", type=_positive_int)

@@ -107,7 +107,7 @@ class CompilationPlan:
         }
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "CompilationPlan":
+    def from_dict(cls, value: dict[str, Any]) -> CompilationPlan:
         if value.get("schema") != "hephaestus.plan.v1":
             raise ValueError("unsupported plan schema")
         metrics = value["metrics"]
@@ -120,9 +120,7 @@ class CompilationPlan:
             )
             for node in value["nodes"]
         )
-        outputs = tuple(
-            None if ref is None else ref_from_dict(ref) for ref in value["outputs"]
-        )
+        outputs = tuple(None if ref is None else ref_from_dict(ref) for ref in value["outputs"])
         return cls(
             input_count=int(value["input_count"]),
             output_count=int(value["output_count"]),

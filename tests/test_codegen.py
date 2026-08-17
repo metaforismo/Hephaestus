@@ -14,9 +14,12 @@ def test_codegen_has_no_runtime_weight_storage() -> None:
 
     assert "module tiny_core" in rtl
     assert "Runtime weight reads per matrix-vector operation: 0" in rtl
-    assert "weight" not in "\n".join(
-        line for line in rtl.splitlines() if not line.lstrip().startswith("//")
-    ).lower()
+    assert (
+        "weight"
+        not in "\n".join(
+            line for line in rtl.splitlines() if not line.lstrip().startswith("//")
+        ).lower()
+    )
     assert "case" not in rtl.lower()
 
 

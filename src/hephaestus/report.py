@@ -47,10 +47,7 @@ def _source_manifest(loaded: LoadedTensor) -> dict[str, Any]:
         "data_file_size_bytes": loaded.data_path.stat().st_size,
         "tensor_key": loaded.tensor_key,
         "original_shape": list(loaded.original_shape),
-        "selection": [
-            {"start": start, "stop": stop}
-            for start, stop in loaded.selection
-        ],
+        "selection": [{"start": start, "stop": stop} for start, stop in loaded.selection],
         "shape": list(loaded.selected_shape),
         "selected_values_sha256": selected_values_sha256(loaded),
     }
@@ -81,9 +78,7 @@ def topology_metrics(plan: CompilationPlan) -> dict[str, Any]:
         "naive_add_count": plan.naive_add_count,
         "compiled_add_count": plan.cse_add_count,
         "shared_additions_saved": savings,
-        "adder_savings_fraction": (
-            savings / plan.naive_add_count if plan.naive_add_count else 0.0
-        ),
+        "adder_savings_fraction": (savings / plan.naive_add_count if plan.naive_add_count else 0.0),
         "max_combinational_depth": plan.max_depth,
         "unique_atoms": len(atom_fanouts),
         "max_atom_fanout": max(atom_fanouts, default=0),

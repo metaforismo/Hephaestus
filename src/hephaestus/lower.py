@@ -10,7 +10,6 @@ from numpy.typing import NDArray
 
 from .ir import AddNode, Atom, CompilationPlan, NodeRef, ValueRef, ref_sort_key
 
-
 IntArray = NDArray[np.int64]
 
 
@@ -34,10 +33,7 @@ def required_accumulator_width(codes: IntArray, input_width: int) -> int:
         raise ValueError("input_width must be at least 2")
     max_input_magnitude = 1 << (input_width - 1)
     maximum = max(
-        (
-            sum(abs(int(coefficient)) for coefficient in row) * max_input_magnitude
-            for row in codes
-        ),
+        (sum(abs(int(coefficient)) for coefficient in row) * max_input_magnitude for row in codes),
         default=0,
     )
     if maximum == 0:
@@ -178,7 +174,8 @@ def lower_codes(
     chosen_width = minimum_width if accumulator_width is None else accumulator_width
     if chosen_width < minimum_width:
         raise ValueError(
-            f"accumulator_width={chosen_width} is unsafe; at least {minimum_width} bits are required"
+            f"accumulator_width={chosen_width} is unsafe; "
+            f"at least {minimum_width} bits are required"
         )
 
     return CompilationPlan(

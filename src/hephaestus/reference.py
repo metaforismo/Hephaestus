@@ -7,7 +7,6 @@ from numpy.typing import NDArray
 
 from .ir import Atom, CompilationPlan, ValueRef
 
-
 ExactArray = NDArray[np.object_]
 
 
