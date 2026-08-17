@@ -12,8 +12,9 @@ exist as shifts, signs, wires, and shared addition nodes.
 > resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
 > DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
 > evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
-> exhaustive SAT equivalence of mapped standard-cell netlists, and technology-aware ABC area-delay
-> sweeps under versioned input-driver and output-load assumptions.
+> exhaustive SAT equivalence of mapped standard-cell netlists, technology-aware ABC area-delay
+> sweeps under versioned input-driver and output-load assumptions, and exhaustive SAT proof of
+> every distinct netlist produced by that sweep.
 >
 > **Not claimed:** a complete transformer compiler, timing or power closure, competitive
 > post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
@@ -152,10 +153,17 @@ shift/add and by 23.2375% relative to the explicit constant-multiplier source. T
 sweeps 1000, 2000, 4000, 8000, and 16000 ps targets, records whether each target is actually met,
 collapses duplicate coordinates, and retains the two observed Pareto points per backend.
 
-This is a technology-aware ABC estimate under versioned I/O assumptions. It is not sign-off STA,
-SDC timing closure, placed or routed timing, parasitic extraction, or measured silicon. See
-[ABC area-delay evidence](docs/ABC_AREA_DELAY.md) for the assumptions, exact reports, repeatability
-checks, regression reference, and claim boundary.
+A separate downstream proof now verifies the Boolean semantics of every netlist produced by the
+sweep. The 18 labeled runs collapse to six distinct mapped-Verilog SHA-256 digests; all six are
+proved exhaustively over the defined 48-bit input space. A label can reuse a proof only when its
+mapped Verilog is byte-identical to the representative, and an injected output fault must still
+produce a counterexample.
+
+This is a technology-aware ABC estimate plus a separate functional-equivalence layer. It is not
+sign-off STA, SDC timing closure, placed or routed timing, parasitic extraction, or measured
+silicon. See [ABC area-delay evidence](docs/ABC_AREA_DELAY.md) and
+[ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md) for the assumptions, exact reports,
+proof grouping, negative control, regression references, and claim boundaries.
 
 ## Research thesis
 
@@ -181,6 +189,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md),
 [Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md),
 [ABC area-delay evidence](docs/ABC_AREA_DELAY.md),
+[ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
