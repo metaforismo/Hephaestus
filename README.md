@@ -10,10 +10,10 @@ exist as shifts, signs, wires, and shared addition nodes.
 > **Implemented and tested:** JSON/NumPy/Safetensors tensor access, Hugging Face sharded-index
 > resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
 > DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
-> evidence, randomized bit-exact checks, and bounded exhaustive Yosys-SAT equivalence.
+> evidence, bounded exhaustive Yosys-SAT equivalence, and pinned IHP SG13G2 standard-cell mapping.
 >
-> **Not claimed:** a complete transformer compiler, competitive post-layout PPA, 40,000 tokens/s,
-> a 7 nm tapeout, extracted energy, or measured silicon.
+> **Not claimed:** a complete transformer compiler, timing or power closure, competitive
+> post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
 
 ## Why this direction
 
@@ -114,6 +114,17 @@ partial sums across outputs, and hash-conses the remaining balanced addition tre
 reference evaluator checks the serialized graph with arbitrary-precision integers, avoiding false
 success caused by NumPy `int64` overflow.
 
+## First pinned mapped result
+
+For the bundled 4×6 integer microcase, the same IHP SG13G2 typical Liberty and Yosys/ABC flow maps
+the shared DAG to 492 cells and 5350.6656 Liberty area units. The matched naive shift/add backend
+maps to 574 cells and 6285.0816 units; the explicit constant-multiplier source maps to 574 cells and
+6248.7936 units.
+
+This result is a reproducible standard-cell mapped-area estimate, not placed area, timing, power,
+or post-layout PPA. See [Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md) for the exact flow,
+digests, regression reference, independent area cross-check, and claim boundary.
+
 ## Research thesis
 
 Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
@@ -135,6 +146,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Structural evidence](docs/EVIDENCE.md), [Matched RTL baselines](docs/MATCHED_BASELINES.md),
 [Generic Yosys evidence](docs/SYNTHESIS_EVIDENCE.md),
 [Formal equivalence](docs/FORMAL_EQUIVALENCE.md),
+[Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
