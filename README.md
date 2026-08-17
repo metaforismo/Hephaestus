@@ -1,6 +1,7 @@
 # Hephaestus
 
-**An open model-to-metal research compiler for neural-network weights that become circuit topology.**
+**An open model-to-metal research compiler for neural-network weights that become circuit
+topology.**
 
 Hephaestus takes a constant two-dimensional tensor, quantizes it to signed powers of two, finds
 reusable partial sums, and emits synthesizable SystemVerilog. The generated direct-logic core has
@@ -10,7 +11,8 @@ exist as shifts, signs, wires, and shared addition nodes.
 > **Implemented and tested:** JSON/NumPy/Safetensors tensor access, Hugging Face sharded-index
 > resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
 > DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
-> evidence, bounded exhaustive Yosys-SAT equivalence, and pinned IHP SG13G2 standard-cell mapping.
+> evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
+> and exhaustive SAT equivalence of mapped standard-cell netlists.
 >
 > **Not claimed:** a complete transformer compiler, timing or power closure, competitive
 > post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
@@ -121,9 +123,16 @@ the shared DAG to 492 cells and 5350.6656 Liberty area units. The matched naive 
 maps to 574 cells and 6285.0816 units; the explicit constant-multiplier source maps to 574 cells and
 6248.7936 units.
 
-This result is a reproducible standard-cell mapped-area estimate, not placed area, timing, power,
-or post-layout PPA. See [Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md) for the exact flow,
-digests, regression reference, independent area cross-check, and claim boundary.
+A downstream proof loads functional Boolean models from the same pinned Liberty and symbolically
+proves all three mapped netlists against an independent reference derived directly from `codes.npy`.
+The proof covers every defined 48-bit input assignment and requires a synthetic output fault to
+produce a counterexample.
+
+This result is a reproducible standard-cell mapped-area estimate plus bounded mapped-netlist
+functional equivalence. It is not placed area, timing, power, or post-layout PPA. See
+[Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md) and
+[Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md) for the exact flows, digests,
+negative controls, and claim boundaries.
 
 ## Research thesis
 
@@ -147,6 +156,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Generic Yosys evidence](docs/SYNTHESIS_EVIDENCE.md),
 [Formal equivalence](docs/FORMAL_EQUIVALENCE.md),
 [Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md),
+[Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
