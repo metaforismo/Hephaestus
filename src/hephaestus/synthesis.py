@@ -297,6 +297,8 @@ def build_synthesis_evidence(
     if not matched_manifest_path.is_file():
         raise SynthesisError(f"matched bundle is missing {matched_manifest_path.name}")
     matched_manifest = _load_json(matched_manifest_path)
+    preserved_manifest = output / "source_matched_manifest.json"
+    shutil.copyfile(matched_manifest_path, preserved_manifest)
     if matched_manifest.get("schema") != "hephaestus.matched-baselines.v1":
         raise SynthesisError("unsupported matched-baseline manifest schema")
     if not matched_manifest.get("claims", {}).get("matched_integer_contract_verified"):
@@ -368,8 +370,8 @@ def build_synthesis_evidence(
         "schema": "hephaestus.generic-yosys-evidence.v1",
         "evidence_level": "generic_yosys_post_techmap",
         "source": {
-            "matched_manifest": str(matched_manifest_path),
-            "matched_manifest_sha256": sha256_file(matched_manifest_path),
+            "matched_manifest": preserved_manifest.name,
+            "matched_manifest_sha256": sha256_file(preserved_manifest),
         },
         "tool": {
             "name": "Yosys",
