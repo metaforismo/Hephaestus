@@ -45,19 +45,23 @@ jobs:
           python -m py_compile \
             src/hephaestus/mapped_formal.py \
             tests/test_mapped_formal.py
-      - name: Replace the research probe with production evidence
-        run: |
-          set -euo pipefail
-          rm -f .github/workflows/ihp-mapped-sat-probe.yml
-          rm -rf .bootstrap/ihp-mapped-formal
-          rm -f .github/workflows/apply-ihp-mapped-formal-payload.yml
-          git diff --check
-      - name: Commit production implementation
+          git diff --check -- \
+            README.md \
+            docs/MAPPED_FORMAL_EQUIVALENCE.md \
+            docs/MAPPED_SYNTHESIS.md \
+            src/hephaestus/mapped_formal.py \
+            tests/test_mapped_formal.py
+      - name: Commit non-workflow production files
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add \
+            README.md \
+            docs/MAPPED_FORMAL_EQUIVALENCE.md \
+            docs/MAPPED_SYNTHESIS.md \
+            src/hephaestus/mapped_formal.py \
+            tests/test_mapped_formal.py
           git diff --cached --check
-          git commit -m 'Add formal equivalence for IHP mapped netlists'
+          git commit -m 'Add mapped standard-cell formal evidence implementation'
           git push origin HEAD:feat/ihp-mapped-formal-evidence
