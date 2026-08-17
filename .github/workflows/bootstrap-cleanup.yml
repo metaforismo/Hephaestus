@@ -1,0 +1,29 @@
+name: Bootstrap cleanup
+
+on:
+  push:
+    branches:
+      - feat/bootstrap-model-to-metal-compiler
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove temporary bootstrap workflows
+        run: |
+          sleep 20
+          git pull --rebase origin feat/bootstrap-model-to-metal-compiler
+          rm -f .github/workflows/bootstrap-format.yml
+          rm -f .github/workflows/bootstrap-cleanup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove temporary bootstrap automation"
+          git push
