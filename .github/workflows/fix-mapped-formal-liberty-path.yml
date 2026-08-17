@@ -1,0 +1,82 @@
+name: One-shot mapped formal Liberty-path fix
+
+on:
+  push:
+    branches:
+      - feat/ihp-mapped-formal-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ihp-mapped-formal-evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch and verify the proof-path selection
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/hephaestus/mapped_formal.py')
+          text = path.read_text(encoding='utf-8')
+          old_signature = '''    timeout_seconds: int,
+              expect_counterexample: bool,
+          ) -> dict[str, Any]:'''
+          if old_signature not in text:
+              old_signature = '''    timeout_seconds: int,
+    expect_counterexample: bool,
+) -> dict[str, Any]:'''
+          new_signature = old_signature.replace(
+              '    expect_counterexample: bool,\n',
+              '    expect_counterexample: bool,\n'
+              '    liberty_path: str = "../../technology/technology.lib",\n',
+          )
+          if old_signature not in text:
+              raise SystemExit('run signature pattern was not found')
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_script = '''        _mapped_proof_script(
+            miter_module=miter_module,
+            expect_counterexample=expect_counterexample,
+        ),'''
+          new_script = '''        _mapped_proof_script(
+            miter_module=miter_module,
+            liberty_path=liberty_path,
+            expect_counterexample=expect_counterexample,
+        ),'''
+          if old_script not in text:
+              raise SystemExit('proof script call pattern was not found')
+          text = text.replace(old_script, new_script, 1)
+
+          old_negative = '''        timeout_seconds=timeout_seconds,
+        expect_counterexample=True,
+    )'''
+          new_negative = '''        timeout_seconds=timeout_seconds,
+        expect_counterexample=True,
+        liberty_path="../technology/technology.lib",
+    )'''
+          if old_negative not in text:
+              raise SystemExit('negative-control call pattern was not found')
+          text = text.replace(old_negative, new_negative, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          python -m pip install 'ruff==0.16.3' 'pytest>=8' 'numpy>=1.24'
+          ruff check --fix src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+          ruff format src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+          ruff check src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+          pytest -q tests/test_mapped_formal.py
+      - name: Remove the one-shot fix and commit
+        run: |
+          git rm .github/workflows/fix-mapped-formal-liberty-path.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hephaestus/mapped_formal.py tests/test_mapped_formal.py
+          git commit -m 'Use the correct Liberty path for the negative control'
+          git push origin HEAD:feat/ihp-mapped-formal-evidence
