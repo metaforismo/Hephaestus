@@ -1,0 +1,59 @@
+{
+  "schema": "hephaestus.mapped-reference.v1",
+  "reference_id": "ihp-sg13g2-tiny-v1",
+  "case": {
+    "source": "examples/tiny_weights.json",
+    "input_bits": 48,
+    "output_bits": 48,
+    "domain": "quantized_integer_core_before_row_scaling"
+  },
+  "technology": {
+    "configuration": "configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json",
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396"
+  },
+  "tooling": {
+    "yosys": "0.33-5build2",
+    "yosys_abc": "0.33-5build2",
+    "iverilog": "12.0-2build2"
+  },
+  "expected": {
+    "shared_dag": {
+      "cell_count": 492,
+      "library_area": 5350.6656
+    },
+    "naive_shift_add": {
+      "cell_count": 574,
+      "library_area": 6285.0816
+    },
+    "constant_multipliers": {
+      "cell_count": 574,
+      "library_area": 6248.7936
+    }
+  },
+  "comparisons_to_shared_dag": {
+    "naive_shift_add": {
+      "cell_reduction_percent": 14.285714285714286,
+      "library_area_reduction_percent": 14.867205542725175
+    },
+    "constant_multipliers": {
+      "cell_reduction_percent": 14.285714285714286,
+      "library_area_reduction_percent": 14.372822299651563
+    }
+  },
+  "first_verified_evidence": {
+    "workflow_run": 32066479896,
+    "head_sha": "ba1f7cd0504d803e27701b070f6cf25b019e0b69",
+    "artifact_sha256": "25c1f6dd6ed38d15ff7bc6790c29800a56b620eb49b6a3c4952b8bce21c1cf05"
+  },
+  "claim_boundary": {
+    "standard_cell_mapping_performed": true,
+    "post_mapping_library_area_estimated": true,
+    "timing_analyzed": false,
+    "power_estimated": false,
+    "placement_performed": false,
+    "routing_performed": false,
+    "post_layout_pex_verified": false,
+    "silicon_verified": false
+  }
+}
