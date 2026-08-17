@@ -95,41 +95,48 @@ jobs:
             --out build/ihp-mapped/evidence \
             --verify-repeatability \
             --timeout 300
-      - name: Validate mapped evidence and claim boundary
+      - name: Validate mapped evidence and regression reference
         run: |
           python - <<'PY'
           import json
+          import math
           from pathlib import Path
 
           root = Path('build/ihp-mapped/evidence')
           evidence = json.loads(
               (root / 'mapped_evidence.json').read_text(encoding='utf-8')
           )
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/ihp_sg13g2_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
           assert evidence['evidence_level'] == (
               'standard_cell_mapped_area_estimate'
           )
+          assert reference['schema'] == 'hephaestus.mapped-reference.v1'
           assert evidence['technology']['technology_id'] == (
-              'ihp-sg13g2-stdcell-typ-1p20v-25c'
+              reference['technology']['technology_id']
           )
           assert evidence['technology']['library']['sha256'] == (
-              '7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396'
+              reference['technology']['liberty_sha256']
           )
-          assert set(evidence['backends']) == {
-              'shared_dag',
-              'naive_shift_add',
-              'constant_multipliers',
-          }
-          assert all(
-              backend['metrics']['cell_count'] > 0
-              and backend['library_area'] > 0
-              and backend['area_cross_check_passed']
-              and backend['repeatability']['passed']
-              and all(
+          assert set(evidence['backends']) == set(reference['expected'])
+          for name, expected in reference['expected'].items():
+              backend = evidence['backends'][name]
+              assert backend['metrics']['cell_count'] == expected['cell_count']
+              assert math.isclose(
+                  backend['library_area'],
+                  expected['library_area'],
+                  rel_tol=0,
+                  abs_tol=1e-9,
+              )
+              assert backend['area_cross_check_passed']
+              assert backend['repeatability']['passed']
+              assert all(
                   cell_type.startswith('sg13g2_')
                   for cell_type in backend['metrics']['cell_type_histogram']
               )
-              for backend in evidence['backends'].values()
-          )
           shared_area = evidence['backends']['shared_dag']['library_area']
           assert shared_area < evidence['backends']['naive_shift_add']['library_area']
           assert shared_area < evidence['backends']['constant_multipliers']['library_area']
