@@ -106,9 +106,29 @@ benchmarks/reference/ihp_sg13g2_tiny_v1.json
 CI fails when the compiler, backend, tool package, or flow changes those results without an explicit
 reference update.
 
+## Downstream mapped-netlist equivalence
+
+Mapping and equivalence are intentionally separate evidence stages. The mapped-area manifest is
+written before any functional proof and remains immutable. A downstream builder then:
+
+- verifies the mapped manifest and all preserved digests;
+- loads functional Boolean models from the same pinned Liberty;
+- regenerates an independent reference directly from `codes.npy`;
+- proves each mapped standard-cell netlist with Yosys SAT;
+- requires a data-dependent negative control to produce a counterexample.
+
+That downstream evidence level is:
+
+```text
+yosys_sat_standard_cell_mapped_equivalence
+```
+
+See [Mapped standard-cell equivalence](MAPPED_FORMAL_EQUIVALENCE.md) for its scripts, artifacts,
+resource guard, negative control, and claim boundary.
+
 ## Artifact bundle
 
-A successful run retains:
+A successful mapping run retains:
 
 ```text
 build/ihp-mapped/
@@ -139,7 +159,7 @@ All preserved artifacts receive SHA-256 digests in `mapped_evidence.json`.
 
 ## Claim boundary
 
-This evidence may claim:
+The mapping evidence may claim:
 
 ```json
 {
@@ -149,7 +169,7 @@ This evidence may claim:
 }
 ```
 
-It must still report:
+Its own manifest still reports:
 
 ```json
 {
@@ -165,7 +185,11 @@ It must still report:
 }
 ```
 
+The downstream formal manifest references this mapping artifact and may set
+`mapped_gate_level_equivalence_verified` to true after all positive proofs and the negative control
+pass. It does not retroactively rewrite the mapping manifest.
+
 The Liberty `area` values are library units used for a mapped-cell estimate. They are not placed die
-area and are not labelled as square micrometres here. The next physical evidence level must add
-matched timing constraints, mapped gate-level equivalence, placement, routing, extraction, and
-activity-based power before drawing conclusions about PPA.
+area and are not labelled as square micrometres here. The next physical evidence level must add a
+matched timing contract, placement, routing, extraction, and activity-based power before drawing
+conclusions about PPA.
