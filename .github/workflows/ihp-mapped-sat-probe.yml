@@ -1,0 +1,305 @@
+name: IHP mapped SAT probe
+
+on:
+  push:
+    branches:
+      - research/ihp-mapped-sat-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          yosys -V | tee yosys.version.txt
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Fetch pinned IHP Liberty
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          Path('build/probe').mkdir(parents=True, exist_ok=True)
+          Path('build/probe/url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          Path('build/probe/sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          mkdir -p build/probe/input
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/probe/url.txt)" \
+            --output build/probe/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/probe/sha256.txt)" \
+            build/probe/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build matched and mapped evidence
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/probe/source \
+            --module hephaestus_mapped_sat_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/probe/source \
+            --out build/probe/matched \
+            --module hephaestus_mapped_sat \
+            --verify-vectors 256 \
+            --seed 37 \
+            --simulate
+          python -m hephaestus.mapped build/probe/matched \
+            --technology configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/probe/input/technology.lib \
+            --out build/probe/evidence \
+            --timeout 300
+      - name: Generate mapped-netlist proof harnesses
+        run: |
+          python - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          import numpy as np
+
+          from hephaestus.formal import (
+              emit_miter_systemverilog,
+              emit_reference_systemverilog,
+          )
+
+          root = Path('build/probe')
+          evidence = json.loads(
+              (root / 'evidence' / 'mapped_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          contract = evidence['contract']
+          codes = np.load(root / 'source' / 'codes.npy', allow_pickle=False)
+          reference_module = 'hephaestus_mapped_sat_reference'
+          reference = emit_reference_systemverilog(
+              codes,
+              input_width=contract['input_width'],
+              accumulator_width=contract['accumulator_width'],
+              module_name=reference_module,
+          )
+          input_bits = contract['input_count'] * contract['input_width']
+          output_bits = contract['output_count'] * contract['accumulator_width']
+          proof_root = root / 'proof'
+          proof_root.mkdir(parents=True, exist_ok=True)
+
+          for name, backend in sorted(evidence['backends'].items()):
+              run_dir = proof_root / name
+              run_dir.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(
+                  root / 'evidence' / backend['artifacts']['mapped_verilog']['path'],
+                  run_dir / 'dut.v',
+              )
+              (run_dir / 'reference.sv').write_text(reference, encoding='utf-8')
+              miter_module = f'hephaestus_mapped_sat_{name}_miter'
+              (run_dir / 'miter.sv').write_text(
+                  emit_miter_systemverilog(
+                      dut_module=backend['module'],
+                      reference_module=reference_module,
+                      input_bits=input_bits,
+                      output_bits=output_bits,
+                      module_name=miter_module,
+                  ),
+                  encoding='utf-8',
+              )
+              (run_dir / 'proof.ys').write_text(
+                  '\n'.join(
+                      [
+                          'read_liberty -ignore_miss_func '
+                          '../../evidence/technology/technology.lib',
+                          'read_verilog -sv dut.v reference.sv miter.sv',
+                          f'hierarchy -check -top {miter_module}',
+                          'proc',
+                          'flatten',
+                          'opt',
+                          'check -assert',
+                          'sat -verify -set-def-inputs -prove mismatch 0 '
+                          '-show-inputs -show-outputs',
+                      ]
+                  )
+                  + '\n',
+                  encoding='utf-8',
+              )
+
+          negative_name = 'negative_control'
+          negative_dir = proof_root / negative_name
+          negative_dir.mkdir(parents=True, exist_ok=True)
+          shared = evidence['backends']['shared_dag']
+          shutil.copyfile(
+              root / 'evidence' / shared['artifacts']['mapped_verilog']['path'],
+              negative_dir / 'dut.v',
+          )
+          (negative_dir / 'reference.sv').write_text(reference, encoding='utf-8')
+          negative_module = 'hephaestus_mapped_sat_negative_miter'
+          (negative_dir / 'miter.sv').write_text(
+              emit_miter_systemverilog(
+                  dut_module=shared['module'],
+                  reference_module=reference_module,
+                  input_bits=input_bits,
+                  output_bits=output_bits,
+                  module_name=negative_module,
+                  inject_fault=True,
+              ),
+              encoding='utf-8',
+          )
+          (negative_dir / 'proof.ys').write_text(
+              '\n'.join(
+                  [
+                      'read_liberty -ignore_miss_func '
+                      '../../evidence/technology/technology.lib',
+                      'read_verilog -sv dut.v reference.sv miter.sv',
+                      f'hierarchy -check -top {negative_module}',
+                      'proc',
+                      'flatten',
+                      'opt',
+                      'check -assert',
+                      'sat -set-def-inputs -prove mismatch 0 '
+                      '-show-inputs -show-outputs',
+                  ]
+              )
+              + '\n',
+              encoding='utf-8',
+          )
+          PY
+      - name: Run positive and negative SAT probes
+        run: |
+          set -euo pipefail
+          : > build/probe/proof/status.tsv
+          for backend in \
+            shared_dag \
+            naive_shift_add \
+            constant_multipliers \
+            negative_control
+          do
+            set +e
+            (
+              cd "build/probe/proof/$backend"
+              yosys -s proof.ys > yosys.stdout.txt 2> yosys.stderr.txt
+            )
+            status="$?"
+            set -e
+            printf '%s\t%s\n' "$backend" "$status" \
+              | tee -a build/probe/proof/status.tsv
+          done
+      - name: Normalize probe result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('build/probe/proof')
+          statuses = {}
+          status_path = root / 'status.tsv'
+          if status_path.is_file():
+              for line in status_path.read_text(encoding='utf-8').splitlines():
+                  name, status = line.split('\t')
+                  statuses[name] = int(status)
+          results = {}
+          for name in (
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+              'negative_control',
+          ):
+              run_dir = root / name
+              stdout = (
+                  (run_dir / 'yosys.stdout.txt').read_text(
+                      encoding='utf-8', errors='replace'
+                  )
+                  if (run_dir / 'yosys.stdout.txt').is_file()
+                  else ''
+              )
+              stderr = (
+                  (run_dir / 'yosys.stderr.txt').read_text(
+                      encoding='utf-8', errors='replace'
+                  )
+                  if (run_dir / 'yosys.stderr.txt').is_file()
+                  else ''
+              )
+              combined = stdout + '\n' + stderr
+              results[name] = {
+                  'returncode': statuses.get(name),
+                  'proof_success': (
+                      'SAT proof finished - no model found: SUCCESS!' in combined
+                  ),
+                  'counterexample_found': (
+                      'SAT proof finished - model found: FAIL!' in combined
+                  ),
+                  'unsupported_cell_error': (
+                      'Failed to import cell' in combined
+                      or 'blackbox' in combined.lower()
+                  ),
+              }
+          summary = {
+              'schema': 'hephaestus.ihp-mapped-sat-probe.v1',
+              'results': results,
+              'positive_proofs_passed': all(
+                  results[name]['returncode'] == 0
+                  and results[name]['proof_success']
+                  and not results[name]['counterexample_found']
+                  for name in (
+                      'shared_dag',
+                      'naive_shift_add',
+                      'constant_multipliers',
+                  )
+              ),
+              'negative_control_passed': (
+                  results['negative_control']['returncode'] == 0
+                  and results['negative_control']['counterexample_found']
+                  and not results['negative_control']['proof_success']
+              ),
+          }
+          (root / 'probe.json').write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+      - name: Upload probe bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-mapped-sat-probe
+          path: |
+            build/probe
+            yosys.version.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require meaningful mapped-netlist proofs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(
+              Path('build/probe/proof/probe.json').read_text(encoding='utf-8')
+          )
+          assert result['positive_proofs_passed']
+          assert result['negative_control_passed']
+          PY
