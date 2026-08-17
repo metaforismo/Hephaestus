@@ -82,7 +82,8 @@ def test_emitters_share_the_flattened_contract() -> None:
     assert "input  wire signed [23:0] x_flat" in naive
     assert "$signed(sx_0) *" in multiplier
     assert "<<< 2" in naive
-    assert "cross-output" not in naive.lower()
+    assert "n_o0_" in naive
+    assert "n_o1_" in naive
 
 
 def test_naive_backend_rejects_non_power_of_two_codes() -> None:
