@@ -14,11 +14,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .emit_sv import emit_systemverilog, sanitize_identifier
+from .emit_sv import sanitize_identifier
 from .ir import CompilationPlan
 from .lower import required_accumulator_width
 from .report import sha256_file, write_json
-
 
 IntArray = NDArray[np.int64]
 
@@ -90,8 +89,7 @@ def _module_preamble(
             lines.append(f"  assign sx_{index} = x_{index};")
         else:
             lines.append(
-                f"  assign sx_{index} = "
-                f"{{{{{extension}{{x_{index}[INPUT_WIDTH-1]}}}}, x_{index}}};"
+                f"  assign sx_{index} = {{{{{extension}{{x_{index}[INPUT_WIDTH-1]}}}}, x_{index}}};"
             )
     lines.append("")
     return lines
@@ -144,8 +142,7 @@ def emit_constant_multiplier_systemverilog(
 
         expression = "{ACC_WIDTH{1'b0}}" if not terms else " + ".join(terms)
         lines.append(
-            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = "
-            f"{expression};"
+            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = {expression};"
         )
         lines.append("")
 
@@ -188,9 +185,7 @@ def emit_naive_shift_add_systemverilog(
                 continue
             magnitude = abs(coefficient)
             if magnitude & (magnitude - 1):
-                raise ValueError(
-                    f"coefficient {coefficient} is not a signed power of two"
-                )
+                raise ValueError(f"coefficient {coefficient} is not a signed power of two")
             shift = magnitude.bit_length() - 1
             term = f"a_o{row_index}_i{column_index}"
             source = f"(sx_{column_index} <<< {shift})"
@@ -225,8 +220,7 @@ def emit_naive_shift_add_systemverilog(
 
         expression = "{ACC_WIDTH{1'b0}}" if not level else level[0]
         lines.append(
-            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = "
-            f"{expression};"
+            f"  assign y_flat[{row_index * accumulator_width} +: ACC_WIDTH] = {expression};"
         )
         lines.append("")
 
@@ -331,7 +325,7 @@ def emit_equivalence_testbench(
         "    begin",
         "      #1;",
         "      if ((y_shared !== y_multiplier) || (y_shared !== y_naive)) begin",
-        "        $display(\"FAIL vector=%0d x=%h shared=%h multiplier=%h naive=%h\",",
+        '        $display("FAIL vector=%0d x=%h shared=%h multiplier=%h naive=%h",',
         "                 vector_index, x_flat, y_shared, y_multiplier, y_naive);",
         "        $fatal(1);",
         "      end",
@@ -341,9 +335,7 @@ def emit_equivalence_testbench(
         "  initial begin",
     ]
     for index, value in enumerate(vectors):
-        lines.append(
-            f"    vectors[{index}] = {input_bits}'h{value:0{hex_digits}x};"
-        )
+        lines.append(f"    vectors[{index}] = {input_bits}'h{value:0{hex_digits}x};")
     lines.extend(
         [
             "    for (vector_index = 0; vector_index < VECTOR_COUNT;",
@@ -351,7 +343,7 @@ def emit_equivalence_testbench(
             "      x_flat = vectors[vector_index];",
             "      check_outputs;",
             "    end",
-            "    $display(\"PASS matched backends vectors=%0d\", VECTOR_COUNT);",
+            '    $display("PASS matched backends vectors=%0d", VECTOR_COUNT);',
             "    $finish;",
             "  end",
             "endmodule",
@@ -525,9 +517,7 @@ def build_matched_baselines(
     testbench_path.write_text(testbench, encoding="utf-8")
 
     nonzero = int(np.count_nonzero(codes))
-    naive_adders = int(
-        np.maximum(np.count_nonzero(codes, axis=1) - 1, 0).sum()
-    )
+    naive_adders = int(np.maximum(np.count_nonzero(codes, axis=1) - 1, 0).sum())
     simulation: dict[str, Any] = {"performed": False, "passed": False}
     if simulate:
         simulation = _run_simulation(
@@ -595,9 +585,7 @@ def build_matched_baselines(
             "vectors_executed": vector_count,
             "simulation": simulation,
         },
-        "artifact_sha256": {
-            label: sha256_file(path) for label, path in artifacts.items()
-        },
+        "artifact_sha256": {label: sha256_file(path) for label, path in artifacts.items()},
         "claims": {
             "matched_integer_contract_verified": bool(simulation.get("passed")),
             "post_synthesis_ppa_measured": False,

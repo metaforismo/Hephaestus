@@ -148,9 +148,9 @@ def test_build_matched_baselines_writes_self_contained_artifacts(
     assert manifest["contract"]["output_count"] == codes.shape[0]
     assert manifest["backends"]["shared_dag"]["module"] == shared_module
     assert manifest["backends"]["naive_shift_add"]["cross_output_sharing"] is False
-    assert manifest["backends"]["constant_multipliers"][
-        "source_multiply_operators"
-    ] == int(np.count_nonzero(codes))
+    assert manifest["backends"]["constant_multipliers"]["source_multiply_operators"] == int(
+        np.count_nonzero(codes)
+    )
     assert manifest["claims"] == {
         "matched_integer_contract_verified": False,
         "post_synthesis_ppa_measured": False,
