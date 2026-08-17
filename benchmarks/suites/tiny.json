@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "tiny_exact",
+      "source": "examples/tiny_weights.json",
+      "module": "hephaestus_tiny_exact",
+      "verify_samples": 256,
+      "require_bit_exact": true,
+      "require_zero_weight_reads": true
+    },
+    {
+      "name": "shared_pairs",
+      "source": "benchmarks/matrices/shared_pairs.json",
+      "module": "hephaestus_shared_pairs",
+      "verify_samples": 256,
+      "require_bit_exact": true,
+      "require_zero_weight_reads": true
+    }
+  ]
+}
