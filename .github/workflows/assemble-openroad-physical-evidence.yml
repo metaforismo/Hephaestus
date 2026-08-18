@@ -1,0 +1,141 @@
+name: One-shot assemble OpenROAD physical evidence
+
+on:
+  push:
+    branches:
+      - feat/openroad-physical-evidence
+
+concurrency:
+  group: assemble-openroad-physical-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-physical-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Import the qualifying research-smoke reference
+        run: |
+          set -euo pipefail
+          git fetch origin research/openroad-registered-smoke
+          mkdir -p benchmarks/reference flows/openroad/registered_shared_dag
+          git show \
+            origin/research/openroad-registered-smoke:benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            > benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json
+          git show \
+            origin/research/openroad-registered-smoke:flows/openroad/registered_shared_dag/PROBE_RESULT.md \
+            > flows/openroad/registered_shared_dag/PROBE_RESULT.md
+
+      - name: Assemble and normalize the Python implementation
+        run: |
+          set -euo pipefail
+          cat .github/openroad-physical-parts/module_*.part \
+            > src/hephaestus/openroad_physical.py
+          cat .github/openroad-physical-parts/tests_*.part \
+            > tests/test_openroad_physical.py
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/hephaestus/openroad_physical.py')
+          text = path.read_text(encoding='utf-8')
+          replacement = r'''def emit_config(
+              contract: dict[str, Any],
+              *,
+              backend_name: str,
+              backend: dict[str, Any],
+          ) -> str:
+              """Emit one ORFS config while keeping every physical variable common."""
+
+              if backend_name not in _BACKENDS:
+                  raise ValueError(f"unsupported backend: {backend_name}")
+              floorplan = contract["floorplan"]
+              routing = contract["routing"]
+              clock = contract["clock"]
+              die = " ".join(
+                  f"{float(value):.9g}" for value in floorplan["die_area_um"]
+              )
+              core = " ".join(
+                  f"{float(value):.9g}" for value in floorplan["core_area_um"]
+              )
+              lines = [
+                  f"export PLATFORM = {contract['platform']}",
+                  f"export DESIGN_NAME = {backend['wrapper_module']}",
+                  f"export DESIGN_NICKNAME = hephaestus_registered_{backend_name}",
+                  "",
+                  (
+                      "export VERILOG_FILES = "
+                      f"$(HEPHAESTUS_REGISTERED_DIR)/{backend['core_rtl']} \\\\"
+                  ),
+                  (
+                      "                       "
+                      f"$(HEPHAESTUS_REGISTERED_DIR)/{backend['wrapper_rtl']}"
+                  ),
+                  "export SDC_FILE = $(dir $(DESIGN_CONFIG))/constraint.sdc",
+                  "export RULES_JSON = $(dir $(DESIGN_CONFIG))/rules.json",
+                  "",
+                  f"export CLOCK_PORT = {clock['port']}",
+                  f"export CLOCK_PERIOD = {float(clock['period_ns']):.9g}",
+                  f"export DIE_AREA = {die}",
+                  f"export CORE_AREA = {core}",
+                  f"export PLACE_DENSITY = {float(floorplan['place_density']):.9g}",
+                  f"export MIN_ROUTING_LAYER = {routing['minimum_layer']}",
+                  f"export MAX_ROUTING_LAYER = {routing['maximum_layer']}",
+                  f"export OPENROAD_THREADS = {int(contract['openroad_threads'])}",
+                  "",
+              ]
+              return "\n".join(lines)
+          '''.replace('          ', '')
+          pattern = re.compile(
+              r'def emit_config\(.*?\n(?=def prepare_physical_evidence\()',
+              re.DOTALL,
+          )
+          text, count = pattern.subn(replacement + '\n\n', text, count=1)
+          if count != 1:
+              raise SystemExit(f'could not replace emit_config exactly once: {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -rf .github/openroad-physical-parts
+          rm .github/workflows/assemble-openroad-physical-evidence.yml
+
+      - name: Install, format, and test the implementation
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check --fix \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+          python -m hephaestus.openroad_physical --help
+
+      - name: Commit the production source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add matched registered OpenROAD physical evidence'
+          git push origin HEAD:feat/openroad-physical-evidence
