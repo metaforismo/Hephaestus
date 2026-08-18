@@ -1,0 +1,197 @@
+# Matched registered OpenROAD physical evidence
+
+This evidence layer consumes the registered matched-tile bundle and implements all three backends
+under one immutable IHP SG13G2 OpenROAD-flow-scripts contract.
+
+```text
+verified integer contract
+  → matched combinational RTL
+  → exhaustive source-core SAT proof
+  → identical one-cycle registered boundaries
+  → independent streaming oracle and negative control
+  → three matched ORFS inputs
+  → two clean place-and-route attempts per backend
+  → normalized physical repeatability
+  → digest-binding negative control
+```
+
+## Compared backends
+
+The physical comparison contains exactly:
+
+1. `shared_dag` — the Hephaestus cross-output shared partial-sum topology;
+2. `naive_shift_add` — independent output-local shift/add trees;
+3. `constant_multipliers` — explicit constant multipliers and output-local accumulation.
+
+Every design retains its own registered wrapper, but the wrappers have the same port widths, clock,
+reset, valid behavior, latency, and initiation interval. The physical builder rejects a bundle that
+has not already passed the registered streaming oracle, reset and bubble checks, source-core
+exhaustive proof, and both formal and simulation negative controls.
+
+## Immutable execution contract
+
+The production configuration is:
+
+```text
+configs/physical/ihp_sg13g2_openroad_registered_v1.json
+```
+
+It records:
+
+- the successful single-backend research probe and artifact digest;
+- an immutable `openroad/orfs@sha256:…` image reference;
+- captured ORFS, OpenROAD, Yosys, and KLayout identities from that image;
+- the `ihp-sg13g2` platform;
+- clock period, uncertainty, and transition;
+- input/output delays, input driver, and output load;
+- explicit die and core coordinates;
+- placement density and routing-layer range;
+- two attempts per backend and the exact required output filenames.
+
+A mutable Docker tag is rejected by the package before an ORFS design is prepared.
+
+## Common boundary
+
+The first contract uses:
+
+```text
+clock:                 clk, rising edge
+clock period:          4.0 ns
+clock uncertainty:     0.05 ns
+clock transition:      0.05 ns
+input delay:           0.0 ns
+output delay:          0.0 ns
+input driver:          sg13g2_buf_4
+output load:           0.01 pF
+DIE_AREA:              0 0 250 250 µm
+CORE_AREA:             20 20 230 230 µm
+PLACE_DENSITY:         0.35
+routing layers:        Metal2 through Metal5
+flow variant:          base
+```
+
+These values are an explicit regression boundary for the bundled 4×6 integer microcase. They are
+not presented as an optimized product floorplan or maximum-frequency target.
+
+## Prepare the designs
+
+```bash
+python -m hephaestus.openroad_physical prepare \
+  build/source-chain/registered \
+  --config configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+  --out build/openroad/prepared
+```
+
+The command copies and hashes the exact registered source manifest and physical configuration, then
+creates one self-contained out-of-tree ORFS design per backend:
+
+```text
+build/openroad/prepared/
+├── openroad_prepared.json
+├── physical_config.json
+├── source_registered_manifest.json
+└── designs/
+    ├── shared_dag/
+    ├── naive_shift_add/
+    └── constant_multipliers/
+```
+
+Each design contains only its exact core RTL, registered wrapper, common SDC, and generated
+`config.mk`. Physical claims remain false at this stage.
+
+## Required physical outputs
+
+Every successful attempt must preserve non-empty copies of:
+
+```text
+6_final.gds
+6_final.def
+6_final.v
+6_final.odb
+6_final.spef
+```
+
+Each file is bound by byte count and SHA-256 in `run.json`. The run also records the backend,
+attempt number, wrapper module, design nickname, platform, flow variant, prepared-manifest digest,
+immutable container identity, captured tool versions, optional ORFS metadata, and console log.
+
+## Repeatability rule
+
+Every backend is implemented twice in a clean `WORK_HOME` using the same image and inputs.
+Repeatability is not defined as a naive equality check on every binary:
+
+- final Verilog is compared byte for byte;
+- routed DEF is compared after normalizing explicit generator-date comments;
+- SPEF is compared after normalizing only the `*DATE` field;
+- GDS is parsed record by record and hashed after zeroing only `BGNLIB` and `BGNSTR` timestamp
+  payloads;
+- OpenDB remains per-run provenance, and the manifest reports whether its raw bytes happened to be
+  identical.
+
+Geometry, netlist, DEF, or extracted-RC drift still fails the evidence. The normalization cannot
+hide changed coordinates, layers, nets, capacitance, resistance, connectivity, or logic.
+
+## Binding negative control
+
+The workflow copies one real routed attempt, flips one byte in its final GDS, and leaves the
+original `run.json` untouched. The production binder must reject the tampered tree with a digest
+mismatch. The exact original and mutated digests plus the rejection message are retained in:
+
+```text
+negative_control.json
+```
+
+This protects against a disconnected artifact manifest or a binder that trusts filenames without
+reading the physical output.
+
+## Final evidence
+
+```bash
+python -m hephaestus.openroad_physical bind \
+  build/openroad/prepared \
+  --runs build/openroad/runs \
+  --negative-control build/openroad/negative_control.json \
+  --out build/openroad/evidence
+```
+
+The final authority is:
+
+```text
+build/openroad/evidence/openroad_physical_evidence.json
+```
+
+The first qualifying execution also creates:
+
+```text
+benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json
+```
+
+The reference pins the immutable toolchain and physical contract, stable output signatures,
+physical metadata values that are equal across both attempts, GDS equivalence groups, negative
+control, and exact claim boundary. Volatile runtime, host, date, memory, CPU, commit-banner, and
+version fields are not treated as QoR reproducibility metrics.
+
+## What a passing artifact proves
+
+A passing artifact may claim that:
+
+- the exact verified registered source was bound by digest;
+- all three matched backends completed the declared ORFS flow;
+- placement and routing were performed for every backend;
+- GDS, DEF, OpenDB, final netlist, and SPEF were produced for every backend;
+- the stable physical signatures repeated across two clean attempts;
+- a one-byte GDS mutation was rejected;
+- the three backends were compared under the same physical boundary.
+
+It does not yet prove:
+
+- post-physical functional or sequential equivalence;
+- independent DRC cleanliness;
+- LVS cleanliness;
+- activity-based dynamic power;
+- validated extracted simulation or PEX equivalence;
+- variation, crosstalk, IR-drop, electromigration, antenna, or density sign-off;
+- foundry acceptance or fabricated-silicon behavior.
+
+Those remain separate downstream evidence layers. In particular, successful ORFS completion is not
+renamed “foundry sign-off.”
