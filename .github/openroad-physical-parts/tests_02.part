@@ -1,0 +1,242 @@
+
+
+def _artifact(path: Path, root: Path) -> dict[str, object]:
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "size_bytes": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _write_run(
+    prepared_path: Path,
+    run_root: Path,
+    *,
+    backend: str,
+    attempt: int,
+    geometry_byte: int = 7,
+    metric_area: float = 100.0,
+) -> Path:
+    prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+    run_root.mkdir(parents=True, exist_ok=True)
+    variant = f"attempt-{attempt:02d}"
+    output = run_root / "results" / "ihp-sg13g2" / f"design_{backend}" / variant
+    reports = run_root / "reports" / "ihp-sg13g2" / f"design_{backend}" / variant
+    provenance = run_root / "provenance"
+    output.mkdir(parents=True)
+    reports.mkdir(parents=True)
+    provenance.mkdir()
+
+    gds = output / "6_final.gds"
+    final_def = output / "6_final.def"
+    final_verilog = output / "6_final.v"
+    final_odb = output / "6_final.odb"
+    final_spef = output / "6_final.spef"
+    metadata = reports / "metadata.json"
+    gds.write_bytes(_fake_gds(attempt, geometry_byte=geometry_byte))
+    final_def.write_text(
+        """VERSION 5.8 ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 240000 240000 ) ;
+ROW ROW_0 CoreSite 0 0 N DO 10 BY 1 STEP 480 0 ;
+TRACKS X 0 DO 10 STEP 420 LAYER Metal1 ;
+COMPONENTS 12 ;
+END COMPONENTS
+NETS 9 ;
+END NETS
+SPECIALNETS 2 ;
+END SPECIALNETS
+END DESIGN
+""",
+        encoding="utf-8",
+    )
+    final_verilog.write_text("module final; endmodule\n", encoding="utf-8")
+    final_odb.write_bytes(f"odb-{backend}-{attempt}".encode())
+    final_spef.write_text("*SPEF IEEE 1481-1998\n", encoding="utf-8")
+    _write_json(
+        metadata,
+        {
+            "finish__design__instance__area__stdcell": metric_area,
+            "finish__timing__setup__ws": 0.25,
+            "finish__route__wirelength": 200,
+            "run__runtime__seconds": 10 + attempt,
+        },
+    )
+    image_inspect = provenance / "orfs-image-inspect.json"
+    tool_versions = provenance / "tool-versions.txt"
+    image_inspect.write_text("[]\n", encoding="utf-8")
+    tool_versions.write_text("OpenROAD test\n", encoding="utf-8")
+    stdout = run_root / "orfs.stdout.txt"
+    stderr = run_root / "orfs.stderr.txt"
+    returncode = run_root / "orfs.returncode.txt"
+    stdout.write_text("ok\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    returncode.write_text("0\n", encoding="utf-8")
+
+    backend_spec = prepared["backends"][backend]
+    artifacts = {
+        "final_gds": _artifact(gds, run_root),
+        "final_def": _artifact(final_def, run_root),
+        "final_verilog": _artifact(final_verilog, run_root),
+        "final_odb": _artifact(final_odb, run_root),
+        "final_spef": _artifact(final_spef, run_root),
+        "metadata": _artifact(metadata, run_root),
+    }
+    manifest = {
+        "schema": "hephaestus.openroad-physical-run.v1",
+        "evidence_level": "single_registered_backend_orfs_rtl_to_gds",
+        "identity": {
+            "backend": backend,
+            "attempt": attempt,
+            "variant": variant,
+        },
+        "source": {
+            "prepared_manifest_sha256": sha256_file(prepared_path),
+            "registered_manifest_sha256": prepared["source"][
+                "registered_manifest_sha256"
+            ],
+            "core_sha256": backend_spec["core_sha256"],
+            "wrapper_sha256": backend_spec["wrapper_sha256"],
+            "config_sha256": backend_spec["config_sha256"],
+            "sdc_sha256": backend_spec["sdc_sha256"],
+            "contract_sha256": prepared["contract"]["sha256"],
+        },
+        "toolchain": {
+            "orfs_image_repo_digest": prepared["toolchain"][
+                "orfs_image_repo_digest"
+            ],
+            "image_inspect": _artifact(image_inspect, run_root),
+            "tool_versions": _artifact(tool_versions, run_root),
+        },
+        "artifacts": artifacts,
+        "normalized": {
+            "gds_timestamp_normalized_sha256": gds_timestamp_normalized_sha256(gds),
+            "def_metrics": parse_def_metrics(final_def),
+            "stable_metadata_metrics": stable_metadata_metrics(
+                json.loads(metadata.read_text(encoding="utf-8"))
+            ),
+        },
+        "execution": {
+            "returncode": 0,
+            "stdout": _artifact(stdout, run_root),
+            "stderr": _artifact(stderr, run_root),
+            "returncode_file": _artifact(returncode, run_root),
+        },
+        "claims": {
+            "registered_source_binding_verified": True,
+            "pinned_orfs_image_used": True,
+            "placement_performed": True,
+            "routing_performed": True,
+            "gds_generated": True,
+            "spef_generated": True,
+            "metadata_generated": True,
+            "post_physical_equivalence_verified": False,
+            "drc_clean": False,
+            "lvs_clean": False,
+            "power_estimated_with_activity": False,
+            "post_layout_pex_verified": False,
+            "foundry_signoff_complete": False,
+            "silicon_verified": False,
+        },
+    }
+    manifest_path = run_root / "openroad_run.json"
+    _write_json(manifest_path, manifest)
+    return manifest_path
+
+
+def _prepared_fixture(tmp_path: Path) -> Path:
+    bundle, registered_reference, probe_reference, physical_contract = _source_fixture(
+        tmp_path
+    )
+    prepare_physical_evidence(
+        bundle,
+        registered_reference,
+        probe_reference,
+        physical_contract,
+        tmp_path / "prepared",
+    )
+    return tmp_path / "prepared/prepared.json"
+
+
+def test_binder_accepts_six_repeatable_runs(tmp_path: Path) -> None:
+    prepared = _prepared_fixture(tmp_path)
+    runs = tmp_path / "runs"
+    for backend_index, backend in enumerate(BACKENDS):
+        for attempt in (1, 2):
+            _write_run(
+                prepared,
+                runs / backend / f"attempt-{attempt:02d}",
+                backend=backend,
+                attempt=attempt,
+                geometry_byte=7 + backend_index,
+                metric_area=100.0 + backend_index,
+            )
+
+    evidence = bind_physical_evidence(prepared, runs, tmp_path / "evidence")
+
+    assert evidence["schema"] == "hephaestus.openroad-physical-evidence.v1"
+    assert set(evidence["backends"]) == set(BACKENDS)
+    assert evidence["claims"]["all_three_backends_routed"]
+    assert evidence["claims"]["physical_repeatability_verified"]
+    assert evidence["claims"]["post_physical_equivalence_verified"] is False
+    assert evidence["claims"]["comparative_ppa_claim_enabled"] is False
+    assert (tmp_path / "evidence/SUMMARY.md").is_file()
+
+
+def test_binder_rejects_a_missing_attempt(tmp_path: Path) -> None:
+    prepared = _prepared_fixture(tmp_path)
+    runs = tmp_path / "runs"
+    for backend in BACKENDS:
+        for attempt in (1, 2):
+            if backend == "shared_dag" and attempt == 2:
+                continue
+            _write_run(
+                prepared,
+                runs / backend / f"attempt-{attempt:02d}",
+                backend=backend,
+                attempt=attempt,
+            )
+
+    with pytest.raises(OpenROADPhysicalError, match="expected 6 physical run manifests"):
+        bind_physical_evidence(prepared, runs, tmp_path / "evidence")
+
+
+def test_binder_rejects_gds_geometry_drift(tmp_path: Path) -> None:
+    prepared = _prepared_fixture(tmp_path)
+    runs = tmp_path / "runs"
+    for backend in BACKENDS:
+        for attempt in (1, 2):
+            geometry = 9 if backend == "shared_dag" and attempt == 2 else 7
+            _write_run(
+                prepared,
+                runs / backend / f"attempt-{attempt:02d}",
+                backend=backend,
+                attempt=attempt,
+                geometry_byte=geometry,
+            )
+
+    with pytest.raises(OpenROADPhysicalError, match="repeatability failed"):
+        bind_physical_evidence(prepared, runs, tmp_path / "evidence")
+
+
+def test_binder_rejects_a_tampered_source_binding(tmp_path: Path) -> None:
+    prepared = _prepared_fixture(tmp_path)
+    runs = tmp_path / "runs"
+    first_path: Path | None = None
+    for backend in BACKENDS:
+        for attempt in (1, 2):
+            path = _write_run(
+                prepared,
+                runs / backend / f"attempt-{attempt:02d}",
+                backend=backend,
+                attempt=attempt,
+            )
+            if first_path is None:
+                first_path = path
+    assert first_path is not None
+    manifest = json.loads(first_path.read_text(encoding="utf-8"))
+    manifest["source"]["wrapper_sha256"] = "0" * 64
+    _write_json(first_path, manifest)
+
+    with pytest.raises(OpenROADPhysicalError, match="source binding differs"):
+        bind_physical_evidence(prepared, runs, tmp_path / "evidence")
