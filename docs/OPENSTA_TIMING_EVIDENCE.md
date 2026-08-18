@@ -113,6 +113,46 @@ and its evidence level is:
 opensta_pre_layout_timing_of_formally_proved_abc_netlists
 ```
 
+## Production timing interface
+
+The preparation, Tcl generation, OpenSTA execution, report parsing, repeatability comparison, and
+manifest normalization live in one package module:
+
+```text
+src/hephaestus/opensta_timing.py
+```
+
+Prepare the selected mapped netlists with:
+
+```bash
+python -m hephaestus.opensta_timing prepare \
+  build/opensta-evidence/area-delay \
+  --out build/opensta-evidence/timing \
+  --period-ns 4.0 \
+  --input-delay-ns 0.0 \
+  --output-delay-ns 0.0 \
+  --driving-cell sg13g2_buf_4 \
+  --output-load-pf 0.01 \
+  --labels unconstrained d4000ps
+```
+
+Run the prepared analyses twice with the captured binary:
+
+```bash
+python -m hephaestus.opensta_timing run \
+  build/opensta-evidence/timing \
+  --sta build/opensta-evidence/tooling/opensta.bin \
+  --tool-metadata build/opensta-evidence/tooling/tool.json \
+  --attempts 2 \
+  --timeout 300
+```
+
+The older temporary wrapper and base scripts were removed after their behavior was consolidated and
+tested. The existing schema identifiers `hephaestus.opensta-sdc-prepared.v1` and
+`hephaestus.opensta-sdc-probe.v1` remain unchanged deliberately, so previously published evidence
+bundles and the formal binder stay compatible. Their names identify an artifact contract, not a
+current source-file layout or an unqualified research claim.
+
 ## Reproduction
 
 The complete flow is exercised by:
