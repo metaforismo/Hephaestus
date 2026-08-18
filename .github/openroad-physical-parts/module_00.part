@@ -1,0 +1,193 @@
+"""Digest-bound matched OpenROAD physical evidence for registered tiles."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from .report import sha256_file, write_json
+
+_BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_STABLE_METRIC_WORDS = (
+    "area",
+    "cell",
+    "clock",
+    "congestion",
+    "drc",
+    "instance",
+    "net",
+    "power",
+    "route",
+    "slack",
+    "tns",
+    "utilization",
+    "via",
+    "violation",
+    "wirelength",
+    "wns",
+)
+_UNSTABLE_METRIC_WORDS = (
+    "date",
+    "elapsed",
+    "host",
+    "memory",
+    "runtime",
+    "timestamp",
+    "version",
+)
+
+
+class OpenROADPhysicalError(RuntimeError):
+    """Raised when matched physical evidence cannot be produced safely."""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OpenROADPhysicalError(f"cannot read JSON artifact {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise OpenROADPhysicalError(f"JSON artifact must be an object: {path}")
+    return value
+
+
+def _require_digest(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise OpenROADPhysicalError(f"{context} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _require_positive_int(value: Any, *, context: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise OpenROADPhysicalError(f"{context} must be a positive integer")
+    return value
+
+
+def _require_number(value: Any, *, context: str) -> float:
+    if type(value) not in (int, float):
+        raise OpenROADPhysicalError(f"{context} must be numeric")
+    return float(value)
+
+
+def _safe_module(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _MODULE_RE.fullmatch(value) is None:
+        raise OpenROADPhysicalError(f"{context} is not a safe module name: {value!r}")
+    return value
+
+
+def _resolve_artifact(
+    root: Path,
+    raw_path: Any,
+    expected_digest: Any,
+    *,
+    context: str,
+) -> Path:
+    if not isinstance(raw_path, str) or not raw_path:
+        raise OpenROADPhysicalError(f"{context}.path must be a non-empty string")
+    digest = _require_digest(expected_digest, context=f"{context}.sha256")
+    relative = Path(raw_path)
+    if relative.is_absolute():
+        raise OpenROADPhysicalError(f"{context}.path must be relative")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise OpenROADPhysicalError(f"{context}.path escapes its artifact root") from exc
+    if resolved.is_symlink():
+        raise OpenROADPhysicalError(f"{context} must not be a symlink")
+    if not resolved.is_file():
+        raise OpenROADPhysicalError(f"{context} does not exist: {resolved}")
+    actual = sha256_file(resolved)
+    if actual != digest:
+        raise OpenROADPhysicalError(
+            f"{context} digest mismatch: expected {digest}, got {actual}"
+        )
+    return resolved
+
+
+def _copy_tree_without_symlinks(source: Path, destination: Path) -> None:
+    source_root = source.resolve()
+    for path in source_root.rglob("*"):
+        if path.is_symlink():
+            raise OpenROADPhysicalError(f"registered bundle contains a symlink: {path}")
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source_root, destination)
+
+
+def _load_contract(path: Path) -> dict[str, Any]:
+    contract = _load_json(path)
+    if contract.get("schema") != "hephaestus.openroad-physical-contract.v1":
+        raise OpenROADPhysicalError("unsupported OpenROAD physical contract schema")
+    if contract.get("backends") != list(_BACKENDS):
+        raise OpenROADPhysicalError("physical contract must name the three matched backends")
+    if contract.get("platform") != "ihp-sg13g2":
+        raise OpenROADPhysicalError("the first physical contract must target ihp-sg13g2")
+    attempts = _require_positive_int(
+        contract.get("attempts_per_backend"),
+        context="attempts_per_backend",
+    )
+    if attempts != 2:
+        raise OpenROADPhysicalError("the v1 physical contract requires exactly two attempts")
+
+    clock = contract.get("clock")
+    floorplan = contract.get("floorplan")
+    io = contract.get("io")
+    routing = contract.get("routing")
+    if not all(isinstance(value, dict) for value in (clock, floorplan, io, routing)):
+        raise OpenROADPhysicalError("physical contract sections are malformed")
+    if clock.get("port") != "clk" or clock.get("name") != "core_clock":
+        raise OpenROADPhysicalError("unexpected physical clock identity")
+    for field in (
+        "period_ns",
+        "input_delay_ns",
+        "output_delay_ns",
+        "uncertainty_ns",
+    ):
+        _require_number(clock.get(field), context=f"clock.{field}")
+    die = floorplan.get("die_area_um")
+    core = floorplan.get("core_area_um")
+    if (
+        not isinstance(die, list)
+        or not isinstance(core, list)
+        or len(die) != 4
+        or len(core) != 4
+    ):
+        raise OpenROADPhysicalError("die and core areas must each contain four coordinates")
+    die_values = [_require_number(value, context="die_area_um") for value in die]
+    core_values = [_require_number(value, context="core_area_um") for value in core]
+    if not (die_values[0] < die_values[2] and die_values[1] < die_values[3]):
+        raise OpenROADPhysicalError("die area is not positive")
+    if not (core_values[0] < core_values[2] and core_values[1] < core_values[3]):
+        raise OpenROADPhysicalError("core area is not positive")
+    if not (
+        die_values[0] <= core_values[0] < core_values[2] <= die_values[2]
+        and die_values[1] <= core_values[1] < core_values[3] <= die_values[3]
+    ):
+        raise OpenROADPhysicalError("core area must be contained in the die area")
+    density = _require_number(floorplan.get("place_density"), context="place_density")
+    if not 0.0 < density < 1.0:
+        raise OpenROADPhysicalError("place_density must be between zero and one")
+    if io.get("input_driver_cell") != "sg13g2_buf_4":
+        raise OpenROADPhysicalError("unexpected IHP input-driver cell")
+    if _require_number(io.get("output_load_pf"), context="output_load_pf") <= 0:
+        raise OpenROADPhysicalError("output load must be positive")
+    if routing.get("minimum_layer") != "Metal2":
+        raise OpenROADPhysicalError("unexpected minimum routing layer")
+    if routing.get("maximum_layer") != "Metal5":
+        raise OpenROADPhysicalError("unexpected maximum routing layer")
+    if _require_positive_int(
+        contract.get("openroad_threads"), context="openroad_threads"
+    ) != 1:
+        raise OpenROADPhysicalError("the v1 flow requires one OpenROAD thread")
+    return contract
