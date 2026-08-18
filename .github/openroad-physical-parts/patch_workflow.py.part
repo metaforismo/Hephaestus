@@ -1,0 +1,52 @@
+from pathlib import Path
+
+path = Path('.github/workflows/openroad-physical-evidence.yml')
+text = path.read_text(encoding='utf-8')
+old = """              for backend in evidence['backends']:
+                  assert evidence['backends'][backend]['repeatability'][
+                      'stable_signatures'
+                  ] == reference['backends'][backend]['stable_signatures']
+"""
+new = """              def flatten(value, prefix=''):
+                  result = {}
+                  if isinstance(value, dict):
+                      for key, child in value.items():
+                          child_prefix = f'{prefix}.{key}' if prefix else str(key)
+                          result.update(flatten(child, child_prefix))
+                  elif isinstance(value, list):
+                      for index, child in enumerate(value):
+                          result.update(flatten(child, f'{prefix}[{index}]'))
+                  else:
+                      result[prefix] = value
+                  return result
+
+              include = (
+                  'area', 'slack', 'tns', 'wirelength', 'violation',
+                  'drc', 'utilization', 'instance', 'cell', 'clock_period',
+              )
+              exclude = (
+                  'runtime', 'elapsed', 'memory', 'cpu', 'wall',
+                  'timestamp', 'date', 'host', 'commit', 'version',
+              )
+              for backend, result in evidence['backends'].items():
+                  assert result['repeatability']['stable_signatures'] == (
+                      reference['backends'][backend]['stable_signatures']
+                  )
+                  first = flatten(result['attempts'][0].get('metadata_payload'))
+                  second = flatten(result['attempts'][1].get('metadata_payload'))
+                  selected = {
+                      key: value
+                      for key, value in first.items()
+                      if key in second
+                      and second[key] == value
+                      and type(value) in (int, float, bool)
+                      and any(token in key.lower() for token in include)
+                      and not any(token in key.lower() for token in exclude)
+                  }
+                  assert dict(sorted(selected.items())) == reference['backends'][
+                      backend
+                  ]['selected_stable_metrics']
+"""
+if old not in text:
+    raise SystemExit('physical workflow reference-validation marker was not found')
+path.write_text(text.replace(old, new, 1), encoding='utf-8')
