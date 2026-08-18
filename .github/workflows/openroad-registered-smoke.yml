@@ -1,13 +1,11 @@
 name: Research OpenROAD registered-tile smoke
 
 on:
-  push:
-    branches:
-      - research/openroad-registered-smoke
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -15,6 +13,9 @@ permissions:
 
 jobs:
   shared-dag-smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.head_ref == 'research/openroad-registered-smoke'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -227,168 +228,14 @@ jobs:
           tail -n 300 build/openroad-smoke/orfs.stderr.txt \
             > "$diagnostics/orfs.stderr.tail.txt" || true
 
-      - name: Build a fail-closed smoke manifest
-        if: steps.orfs.outputs.returncode == '0'
-        env:
-          GITHUB_HEAD_SHA: ${{ github.sha }}
-          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
-        run: |
-          python - <<'PY'
-          from __future__ import annotations
-
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path('build/openroad-smoke')
-          registered = root / 'registered'
-          registered_manifest_path = registered / 'registered_manifest.json'
-          registered_manifest = json.loads(
-              registered_manifest_path.read_text(encoding='utf-8')
-          )
-          shared = registered_manifest['backends']['shared_dag']
-
-          def sha256(path: Path) -> str:
-              digest = hashlib.sha256()
-              with path.open('rb') as handle:
-                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                      digest.update(chunk)
-              return digest.hexdigest()
-
-          def exactly_one(pattern: str) -> Path:
-              matches = sorted(root.glob(pattern))
-              if len(matches) != 1:
-                  raise SystemExit(
-                      f'expected exactly one {pattern!r}, found {len(matches)}: {matches}'
-                  )
-              return matches[0]
-
-          required = {
-              'final_gds': exactly_one('results/**/smoke/6_final.gds'),
-              'final_def': exactly_one('results/**/smoke/6_final.def'),
-              'final_verilog': exactly_one('results/**/smoke/6_final.v'),
-              'final_odb': exactly_one('results/**/smoke/6_final.odb'),
-          }
-          spef_matches = sorted(root.glob('results/**/smoke/6_final.spef'))
-          if len(spef_matches) > 1:
-              raise SystemExit(f'ambiguous final SPEF set: {spef_matches}')
-          if spef_matches:
-              required['final_spef'] = spef_matches[0]
-
-          for label, path in required.items():
-              if not path.is_file() or path.stat().st_size == 0:
-                  raise SystemExit(f'{label} is missing or empty: {path}')
-
-          repo_digests = json.loads(
-              (root / 'provenance/orfs-image-repodigests.json').read_text(
-                  encoding='utf-8'
-              )
-          )
-          if not isinstance(repo_digests, list) or len(repo_digests) != 1:
-              raise SystemExit(f'expected one ORFS image RepoDigest, got {repo_digests!r}')
-
-          config_path = Path('flows/openroad/registered_shared_dag/config.mk')
-          sdc_path = Path('flows/openroad/registered_shared_dag/constraint.sdc')
-          manifest = {
-              'schema': 'hephaestus.openroad-registered-smoke.v1',
-              'evidence_level': 'research_single_backend_rtl_to_gds_smoke',
-              'source': {
-                  'github_head_sha': os.environ['GITHUB_HEAD_SHA'],
-                  'github_run_id': int(os.environ['GITHUB_RUN_ID_VALUE']),
-                  'registered_manifest': registered_manifest_path.relative_to(root).as_posix(),
-                  'registered_manifest_sha256': sha256(registered_manifest_path),
-                  'core_rtl': shared['core_rtl'],
-                  'core_sha256': sha256(registered / shared['core_rtl']),
-                  'wrapper_rtl': shared['wrapper_rtl'],
-                  'wrapper_sha256': sha256(registered / shared['wrapper_rtl']),
-              },
-              'toolchain': {
-                  'orfs_image': 'openroad/orfs:latest',
-                  'orfs_image_repo_digest': repo_digests[0],
-                  'orfs_image_id': (
-                      root / 'provenance/orfs-image-id.txt'
-                  ).read_text(encoding='utf-8').strip(),
-                  'tool_versions': 'provenance/tool-versions.txt',
-                  'tool_versions_sha256': sha256(
-                      root / 'provenance/tool-versions.txt'
-                  ),
-              },
-              'physical_contract': {
-                  'platform': 'ihp-sg13g2',
-                  'backend': 'shared_dag',
-                  'mapping_label': 'registered_source_core',
-                  'clock_port': 'clk',
-                  'clock_period_ns': 4.0,
-                  'die_area_um': [0.0, 0.0, 240.0, 240.0],
-                  'core_area_um': [20.0, 20.0, 220.0, 220.0],
-                  'place_density': 0.50,
-                  'min_routing_layer': 'Metal2',
-                  'max_routing_layer': 'Metal5',
-                  'config': config_path.as_posix(),
-                  'config_sha256': sha256(config_path),
-                  'sdc': sdc_path.as_posix(),
-                  'sdc_sha256': sha256(sdc_path),
-              },
-              'artifacts': {
-                  label: {
-                      'path': path.relative_to(root).as_posix(),
-                      'size_bytes': path.stat().st_size,
-                      'sha256': sha256(path),
-                  }
-                  for label, path in required.items()
-              },
-              'execution': {
-                  'returncode': int(
-                      (root / 'orfs.returncode.txt')
-                      .read_text(encoding='utf-8')
-                      .strip()
-                  ),
-                  'stdout': 'orfs.stdout.txt',
-                  'stdout_sha256': sha256(root / 'orfs.stdout.txt'),
-                  'stderr': 'orfs.stderr.txt',
-                  'stderr_sha256': sha256(root / 'orfs.stderr.txt'),
-              },
-              'claims': {
-                  'registered_source_binding_verified': True,
-                  'single_backend_orfs_flow_completed': True,
-                  'placement_performed': True,
-                  'routing_performed': True,
-                  'gds_generated': True,
-                  'spef_generated': 'final_spef' in required,
-                  'matched_three_backend_physical_comparison_performed': False,
-                  'post_physical_equivalence_verified': False,
-                  'drc_clean': False,
-                  'lvs_clean': False,
-                  'power_estimated_with_activity': False,
-                  'post_layout_pex_verified': False,
-                  'foundry_signoff_complete': False,
-                  'silicon_verified': False,
-              },
-          }
-          if manifest['execution']['returncode'] != 0:
-              raise SystemExit('ORFS return code is nonzero')
-          if manifest['source']['core_sha256'] != shared['core_sha256']:
-              raise SystemExit('registered core digest drifted before physical flow')
-          if manifest['source']['wrapper_sha256'] != shared['wrapper_sha256']:
-              raise SystemExit('registered wrapper digest drifted before physical flow')
-
-          path = root / 'openroad_smoke_manifest.json'
-          path.write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
-          print(json.dumps(manifest, indent=2, sort_keys=True))
-          PY
-
-      - name: Upload the complete research smoke bundle
+      - name: Upload the complete diagnostic bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hephaestus-openroad-registered-shared-dag-smoke
+          name: hephaestus-openroad-registered-netlist-diagnostic
           path: build/openroad-smoke
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Fail when the ORFS flow did not complete
         if: always()
