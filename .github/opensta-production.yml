@@ -1,0 +1,339 @@
+name: Pinned OpenSTA SDC timing probe
+
+on:
+  push:
+    branches:
+      - research/opensta-sdc-probe
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENSTA_COMMIT: 2b751f0e8196b05ef4ed8246b7e27c63c967ec6d
+      CUDD_URL: https://raw.githubusercontent.com/davidkebo/cudd/main/cudd_versions/cudd-3.0.0.tar.gz
+      CUDD_SHA256: b8e966b4562c96a03e7fbea239729587d7b395d53cadcc39a7203b49cf7eeb69
+      CUDD_BYTES: '1175302'
+      VIRTUAL_CLOCK_PERIOD_NS: '4.0'
+      INPUT_DELAY_NS: '0.0'
+      OUTPUT_DELAY_NS: '0.0'
+      OUTPUT_LOAD_PF: '0.01'
+      DRIVING_CELL: sg13g2_buf_4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned build and synthesis dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            curl \
+            flex \
+            git \
+            'iverilog=12.0-2build2' \
+            libeigen3-dev \
+            libfl-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            wget \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Fetch and build pinned CUDD
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-sdc-probe/tooling"
+          mkdir -p "$root"
+          wget --quiet "$CUDD_URL" -O "$root/cudd-3.0.0.tar.gz"
+          printf '%s  %s\n' \
+            "$CUDD_SHA256" \
+            "$root/cudd-3.0.0.tar.gz" \
+            | sha256sum --check --strict
+          test "$(wc -c < "$root/cudd-3.0.0.tar.gz")" = "$CUDD_BYTES"
+          printf '%s\n' "$CUDD_URL" > "$root/cudd.url.txt"
+          printf '%s\n' "$CUDD_SHA256" > "$root/cudd.sha256.txt"
+          printf '%s\n' "$CUDD_BYTES" > "$root/cudd.bytes.txt"
+          tar -xzf "$root/cudd-3.0.0.tar.gz" -C "$root"
+          (
+            cd "$root/cudd-3.0.0"
+            ./configure > configure.stdout.txt 2> configure.stderr.txt
+            make -j2 > make.stdout.txt 2> make.stderr.txt
+          )
+          cp "$root/cudd-3.0.0/configure.stdout.txt" \
+            "$root/cudd-configure.stdout.txt"
+          cp "$root/cudd-3.0.0/configure.stderr.txt" \
+            "$root/cudd-configure.stderr.txt"
+          cp "$root/cudd-3.0.0/make.stdout.txt" \
+            "$root/cudd-make.stdout.txt"
+          cp "$root/cudd-3.0.0/make.stderr.txt" \
+            "$root/cudd-make.stderr.txt"
+      - name: Build exact OpenSTA commit
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-sdc-probe/tooling"
+          source="$root/OpenSTA"
+          mkdir -p "$source"
+          git -C "$source" init
+          git -C "$source" remote add origin \
+            https://github.com/parallaxsw/OpenSTA.git
+          git -C "$source" fetch --depth=1 origin "$OPENSTA_COMMIT"
+          git -C "$source" checkout --detach FETCH_HEAD
+          test "$(git -C "$source" rev-parse HEAD)" = "$OPENSTA_COMMIT"
+          printf '%s\n' "$OPENSTA_COMMIT" > "$root/opensta.commit.txt"
+
+          test -f /usr/include/FlexLexer.h
+          sha256sum /usr/include/FlexLexer.h \
+            | tee "$root/flex-header.sha256.txt"
+
+          cmake \
+            -S "$source" \
+            -B "$source/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUDD_DIR="$root/cudd-3.0.0" \
+            -DFLEX_INCLUDE_DIR=/usr/include \
+            > "$root/opensta-cmake.stdout.txt" \
+            2> "$root/opensta-cmake.stderr.txt"
+          cmake --build "$source/build" --parallel 2 \
+            > "$root/opensta-build.stdout.txt" \
+            2> "$root/opensta-build.stderr.txt"
+
+          sta="$source/build/sta"
+          test -x "$sta"
+          cp "$sta" "$root/opensta.bin"
+          sha256sum "$root/opensta.bin" \
+            | tee "$root/opensta.binary.sha256.txt"
+          ldd "$root/opensta.bin" | sort | tee "$root/opensta.ldd.txt"
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            cmake gcc g++ tcl-dev swig bison flex libfl-dev \
+            libeigen3-dev libfmt-dev yosys yosys-abc iverilog \
+            | sort \
+            | tee "$root/packages.tsv"
+          yosys -V | tee "$root/yosys.version.txt"
+      - name: Smoke-test and identify the built binary
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-sdc-probe/tooling"
+          cat > "$root/smoke.tcl" <<'TCL'
+          puts "HEPHAESTUS_OPENSTA_SMOKE_OK"
+          exit 0
+          TCL
+          "$root/opensta.bin" "$root/smoke.tcl" \
+            > "$root/smoke.stdout.txt" \
+            2> "$root/smoke.stderr.txt"
+          grep -Fx 'HEPHAESTUS_OPENSTA_SMOKE_OK' "$root/smoke.stdout.txt"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('build/opensta-sdc-probe/tooling')
+          binary = root / 'opensta.bin'
+          banner = (root / 'smoke.stdout.txt').read_text(
+              encoding='utf-8'
+          ).splitlines()[0]
+          metadata = {
+              'schema': 'hephaestus.opensta-tool.v1',
+              'repository': 'parallaxsw/OpenSTA',
+              'commit': os.environ['OPENSTA_COMMIT'],
+              'banner': banner,
+              'binary': binary.name,
+              'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'binary_reproducibility_verified': False,
+              'cudd': {
+                  'url': os.environ['CUDD_URL'],
+                  'sha256': os.environ['CUDD_SHA256'],
+                  'bytes': int(os.environ['CUDD_BYTES']),
+              },
+              'flex_header_sha256': (
+                  root / 'flex-header.sha256.txt'
+              ).read_text(encoding='utf-8').split()[0],
+              'packages_sha256': hashlib.sha256(
+                  (root / 'packages.tsv').read_bytes()
+              ).hexdigest(),
+              'dynamic_libraries_sha256': hashlib.sha256(
+                  (root / 'opensta.ldd.txt').read_bytes()
+              ).hexdigest(),
+          }
+          (root / 'tool.json').write_text(
+              json.dumps(metadata, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(metadata, indent=2, sort_keys=True))
+          PY
+      - name: Install and lint the probe harness
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check scripts/opensta_sdc_probe.py
+          ruff format --check scripts/opensta_sdc_probe.py
+          python scripts/opensta_sdc_probe.py --help
+      - name: Fetch and verify the pinned IHP Liberty
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/'
+                  'ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/opensta-sdc-probe/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'technology.json').write_text(
+              json.dumps(config, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/opensta-sdc-probe/input/url.txt)" \
+            --output build/opensta-sdc-probe/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/opensta-sdc-probe/input/sha256.txt)" \
+            build/opensta-sdc-probe/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Rebuild the six proved ABC-mapped netlists
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/opensta-sdc-probe/source \
+            --module hephaestus_opensta_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/opensta-sdc-probe/source \
+            --out build/opensta-sdc-probe/matched \
+            --module hephaestus_opensta \
+            --verify-vectors 256 \
+            --seed 47 \
+            --simulate
+          python -m hephaestus.abc_timing build/opensta-sdc-probe/matched \
+            --technology \
+              configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/opensta-sdc-probe/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/opensta-sdc-probe/area-delay \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prepare explicit SDC analyses
+        run: |
+          python scripts/opensta_sdc_probe.py prepare \
+            build/opensta-sdc-probe/area-delay \
+            --out build/opensta-sdc-probe/sdc \
+            --period-ns "$VIRTUAL_CLOCK_PERIOD_NS" \
+            --input-delay-ns "$INPUT_DELAY_NS" \
+            --output-delay-ns "$OUTPUT_DELAY_NS" \
+            --driving-cell "$DRIVING_CELL" \
+            --output-load-pf "$OUTPUT_LOAD_PF" \
+            --labels unconstrained d4000ps
+      - name: Run and normalize repeatable OpenSTA timing
+        run: |
+          python scripts/opensta_sdc_probe.py run \
+            build/opensta-sdc-probe/sdc \
+            --sta build/opensta-sdc-probe/tooling/opensta.bin \
+            --tool-metadata build/opensta-sdc-probe/tooling/tool.json \
+            --attempts 2 \
+            --timeout 300
+      - name: Validate the probe claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          import re
+          from pathlib import Path
+
+          path = Path(
+              'build/opensta-sdc-probe/sdc/opensta_sdc_probe.json'
+          )
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.opensta-sdc-probe.v1'
+          assert evidence['evidence_level'] == (
+              'opensta_sdc_pre_layout_timing_probe'
+          )
+          assert evidence['tool']['commit'] == (
+              '2b751f0e8196b05ef4ed8246b7e27c63c967ec6d'
+          )
+          assert evidence['tool']['banner'].startswith('OpenSTA 3.1.0 ')
+          assert re.fullmatch(
+              r'[0-9a-f]{64}', evidence['tool']['binary_sha256']
+          )
+          assert evidence['tool']['binary_reproducibility_verified'] is False
+          assert evidence['assumptions'] == {
+              'virtual_clock_period_ns': 4.0,
+              'input_delay_ns': 0.0,
+              'output_delay_ns': 0.0,
+              'driving_cell': 'sg13g2_buf_4',
+              'output_load_pf': 0.01,
+              'parasitics': None,
+              'wire_model': (
+                  'Liberty/default pre-layout model as interpreted by OpenSTA'
+              ),
+          }
+          results = evidence['results']
+          assert len(results) == 6
+          assert {result['backend'] for result in results} == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert {result['label'] for result in results} == {
+              'unconstrained',
+              'd4000ps',
+          }
+          assert len({result['mapped_verilog_sha256'] for result in results}) == 6
+          for result in results:
+              timing = result['timing']
+              assert result['repeatability_passed']
+              assert result['attempts'] == 2
+              assert timing['returncode'] == 0
+              assert timing['period_ns'] == 4.0
+              assert math.isfinite(timing['worst_slack_ns'])
+              assert math.isfinite(timing['total_negative_slack_ns'])
+              assert timing['derived_data_delay_ns'] > 0
+          assert evidence['claims'] == {
+              'opensta_binary_built_from_pinned_source': True,
+              'sdc_constraints_applied': True,
+              'setup_checks_passed': True,
+              'detailed_max_path_reported': True,
+              'pre_layout_timing_analyzed': True,
+              'repeatability_verified': True,
+              'signoff_sta_performed': False,
+              'timing_closed': False,
+              'parasitics_annotated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'power_estimated': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+      - name: Upload complete timing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pinned-opensta-sdc-timing-probe
+          path: |
+            build/opensta-sdc-probe
+            !build/opensta-sdc-probe/tooling/OpenSTA
+            !build/opensta-sdc-probe/tooling/cudd-3.0.0
+          if-no-files-found: error
+          retention-days: 14
