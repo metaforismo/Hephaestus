@@ -1,0 +1,203 @@
+
+
+def _validate_negative_control(
+    path: Path,
+    *,
+    prepared_manifest_digest: str,
+    attempts: int,
+) -> dict[str, Any]:
+    control_path = path.resolve()
+    control = _load_json(control_path)
+    if control.get("schema") != "hephaestus.openroad-physical-negative-control.v1":
+        raise OpenROADPhysicalError("unsupported physical negative-control schema")
+    if control.get("detected") is not True:
+        raise OpenROADPhysicalError("physical negative control was not detected")
+    if control.get("mutation") != "flip_one_byte_in_final_gds":
+        raise OpenROADPhysicalError("unexpected physical negative-control mutation")
+    if control.get("prepared_manifest_sha256") != prepared_manifest_digest:
+        raise OpenROADPhysicalError("negative control is bound to different prepared inputs")
+    backend = control.get("backend")
+    if backend not in BACKENDS:
+        raise OpenROADPhysicalError("negative control identifies an unexpected backend")
+    attempt = control.get("attempt")
+    if type(attempt) is not int or attempt < 1 or attempt > attempts:
+        raise OpenROADPhysicalError("negative control identifies an invalid attempt")
+    original = _require_digest(
+        control.get("original_sha256"), context="negative-control original digest"
+    )
+    mutated = _require_digest(
+        control.get("mutated_sha256"), context="negative-control mutated digest"
+    )
+    if original == mutated:
+        raise OpenROADPhysicalError("negative-control mutation did not change the GDS digest")
+    error = control.get("rejected_error")
+    if not isinstance(error, str) or "digest mismatch" not in error:
+        raise OpenROADPhysicalError("negative control did not exercise digest rejection")
+    return control
+
+
+def bind_openroad_results(
+    prepared_dir: Path,
+    runs_dir: Path,
+    negative_control_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Bind two matched ORFS attempts per backend into one physical evidence artifact."""
+
+    prepared_root = prepared_dir.resolve()
+    runs_root = runs_dir.resolve()
+    output = output_dir.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    prepared, config, prepared_manifest_path = _load_prepared(prepared_root)
+    prepared_digest = sha256_file(prepared_manifest_path)
+    attempts = int(prepared["contract"]["attempts_per_backend"])
+    if attempts != config["execution"]["attempts_per_backend"]:
+        raise OpenROADPhysicalError("prepared attempt count differs from physical config")
+
+    negative_control = _validate_negative_control(
+        negative_control_path,
+        prepared_manifest_digest=prepared_digest,
+        attempts=attempts,
+    )
+
+    backend_results: dict[str, Any] = {}
+    stable_gds: dict[str, str] = {}
+    for backend in BACKENDS:
+        run_results = [
+            _load_run(
+                runs_root / backend / f"attempt_{attempt}",
+                prepared=prepared,
+                config=config,
+                prepared_manifest_path=prepared_manifest_path,
+                backend=backend,
+                attempt=attempt,
+            )
+            for attempt in range(1, attempts + 1)
+        ]
+        if len(run_results) != 2:
+            raise OpenROADPhysicalError("production physical evidence requires two attempts")
+        repeatability = _compare_attempts(run_results[0], run_results[1])
+        stable_gds[backend] = repeatability["stable_signatures"][
+            "final_gds_canonical_sha256"
+        ]
+        backend_results[backend] = {
+            "design": prepared["designs"][backend],
+            "attempts": run_results,
+            "repeatability": repeatability,
+        }
+
+    preserved_prepared = output / "source_openroad_prepared.json"
+    preserved_config = output / "source_physical_config.json"
+    preserved_registered = output / "source_registered_manifest.json"
+    preserved_negative = output / "negative_control.json"
+    shutil.copyfile(prepared_manifest_path, preserved_prepared)
+    shutil.copyfile(prepared_root / prepared["physical_config"]["path"], preserved_config)
+    shutil.copyfile(prepared_root / prepared["source"]["registered_manifest"], preserved_registered)
+    shutil.copyfile(negative_control_path.resolve(), preserved_negative)
+
+    gds_groups: dict[str, list[str]] = {}
+    for backend, digest in stable_gds.items():
+        gds_groups.setdefault(digest, []).append(backend)
+
+    manifest = {
+        "schema": "hephaestus.openroad-registered-physical-evidence.v1",
+        "evidence_level": "matched_registered_ihp_openroad_place_route",
+        "source": {
+            "prepared_manifest": preserved_prepared.name,
+            "prepared_manifest_sha256": sha256_file(preserved_prepared),
+            "registered_manifest": preserved_registered.name,
+            "registered_manifest_sha256": sha256_file(preserved_registered),
+            "physical_config": preserved_config.name,
+            "physical_config_sha256": sha256_file(preserved_config),
+        },
+        "research_probe": config["research_probe"],
+        "toolchain": config["toolchain"],
+        "platform": config["platform"],
+        "contract": prepared["contract"],
+        "backends": backend_results,
+        "canonical_gds_groups": [
+            {"sha256": digest, "backends": sorted(backends)}
+            for digest, backends in sorted(gds_groups.items())
+        ],
+        "negative_control": {
+            "artifact": preserved_negative.name,
+            "sha256": sha256_file(preserved_negative),
+            "backend": negative_control["backend"],
+            "attempt": negative_control["attempt"],
+            "mutation": negative_control["mutation"],
+            "detected": True,
+        },
+        "claims": {
+            "registered_source_bound_by_digest": True,
+            "three_matched_physical_inputs_prepared": True,
+            "all_three_openroad_flows_completed": True,
+            "placement_performed_for_all_backends": True,
+            "routing_performed_for_all_backends": True,
+            "routed_gds_generated_for_all_backends": True,
+            "routed_def_generated_for_all_backends": True,
+            "routed_open_db_generated_for_all_backends": True,
+            "spef_generated_for_all_backends": True,
+            "physical_repeatability_verified": True,
+            "digest_binding_negative_control_detected": True,
+            "matched_three_backend_physical_comparison_performed": True,
+            "post_physical_equivalence_verified": False,
+            "independent_drc_verified": False,
+            "lvs_clean": False,
+            "activity_based_power_estimated": False,
+            "post_layout_pex_verified": False,
+            "foundry_signoff_complete": False,
+            "silicon_verified": False,
+        },
+    }
+    write_json(output / "openroad_physical_evidence.json", manifest)
+    return manifest
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Prepare and bind matched registered OpenROAD physical evidence."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    prepare = subparsers.add_parser("prepare")
+    prepare.add_argument("registered_bundle", type=Path)
+    prepare.add_argument("--config", type=Path, required=True)
+    prepare.add_argument("--out", type=Path, default=Path("build/openroad-prepared"))
+
+    bind = subparsers.add_parser("bind")
+    bind.add_argument("prepared_dir", type=Path)
+    bind.add_argument("--runs", type=Path, required=True)
+    bind.add_argument("--negative-control", type=Path, required=True)
+    bind.add_argument("--out", type=Path, default=Path("build/openroad-evidence"))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    try:
+        if arguments.command == "prepare":
+            manifest = prepare_openroad_designs(
+                arguments.registered_bundle,
+                arguments.config,
+                arguments.out,
+            )
+            print(f"prepared {len(manifest['designs'])} matched ORFS designs")
+        else:
+            manifest = bind_openroad_results(
+                arguments.prepared_dir,
+                arguments.runs,
+                arguments.negative_control,
+                arguments.out,
+            )
+            print(
+                "bound matched physical evidence for "
+                f"{len(manifest['backends'])} registered backends"
+            )
+    except (OpenROADPhysicalError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
