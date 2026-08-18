@@ -15,8 +15,8 @@
     },
     "tests": {
       "target": "tests/test_opensta_binding.py",
-      "bytes": 6827,
-      "sha256": "7b88b49f45d690d4e04bc946b0279c75c034f3519cfa0a84acbb93f078466392",
+      "bytes": 6829,
+      "sha256": "62e86ee80592c4ec410475faf2ab82b1d8244f9735805640df3955eed8b68d57",
       "parts": ["tests.part00", "tests.part01"]
     }
   }
