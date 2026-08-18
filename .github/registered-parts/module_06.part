@@ -1,0 +1,43 @@
+entParser(
+        description="Generate matched registered streaming tiles from formally proved cores."
+    )
+    parser.add_argument("matched_bundle", type=Path)
+    parser.add_argument("--codes", type=Path, required=True)
+    parser.add_argument("--formal-evidence", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=Path("build/registered-tiles"))
+    parser.add_argument("--module", default="hephaestus_registered")
+    parser.add_argument("--verify-vectors", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--simulate", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    if arguments.verify_vectors < 0:
+        print("error: --verify-vectors must be non-negative", file=sys.stderr)
+        return 2
+    try:
+        manifest = build_registered_tiles(
+            arguments.matched_bundle,
+            arguments.codes,
+            arguments.formal_evidence,
+            arguments.out,
+            module_name=arguments.module,
+            random_vectors=arguments.verify_vectors,
+            seed=arguments.seed,
+            simulate=arguments.simulate,
+        )
+    except (RegisteredTileError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        "generated three registered matched tiles; "
+        f"valid_vectors={manifest['verification']['valid_vectors_executed']} "
+        f"simulation_passed={manifest['verification']['simulation']['passed']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
