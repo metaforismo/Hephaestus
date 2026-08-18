@@ -1,0 +1,179 @@
+name: Registered matched tiles
+
+on:
+  push:
+    branches:
+      - main
+      - feat/registered-matched-tiles
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registered-streaming-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned RTL and formal tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Install, lint, and test Hephaestus
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          ruff format --check \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          pytest tests/test_registered.py
+          python -m hephaestus.registered --help
+      - name: Build and prove the combinational source cores
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/registered-evidence/source \
+            --module hephaestus_registered_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/registered-evidence/source \
+            --out build/registered-evidence/matched \
+            --module hephaestus_registered \
+            --verify-vectors 256 \
+            --seed 59 \
+            --simulate
+          python -m hephaestus.formal build/registered-evidence/matched \
+            --codes build/registered-evidence/source/codes.npy \
+            --out build/registered-evidence/formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Build and simulate the registered streaming tiles
+        run: |
+          python -m hephaestus.registered build/registered-evidence/matched \
+            --codes build/registered-evidence/source/codes.npy \
+            --formal-evidence build/registered-evidence/formal/formal_evidence.json \
+            --out build/registered-evidence/registered \
+            --module hephaestus_registered_tile \
+            --verify-vectors 256 \
+            --seed 59 \
+            --simulate
+      - name: Parse and synthesize every registered wrapper
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          root = Path('build/registered-evidence/registered')
+          manifest = json.loads(
+              (root / 'registered_manifest.json').read_text(encoding='utf-8')
+          )
+          synthesis_root = root / 'synthesis'
+          synthesis_root.mkdir()
+          for backend, specification in manifest['backends'].items():
+              script = (
+                  f"read_verilog -sv {specification['core_rtl']} "
+                  f"{specification['wrapper_rtl']}; "
+                  f"hierarchy -check -top {specification['wrapper_module']}; "
+                  "proc; opt; check; stat"
+              )
+              completed = subprocess.run(
+                  ['yosys', '-p', script],
+                  cwd=root,
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  timeout=300,
+              )
+              (synthesis_root / f'{backend}.stdout.txt').write_text(
+                  completed.stdout,
+                  encoding='utf-8',
+              )
+              (synthesis_root / f'{backend}.stderr.txt').write_text(
+                  completed.stderr,
+                  encoding='utf-8',
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(f'Yosys failed for registered backend {backend}')
+          PY
+      - name: Validate the evidence boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(
+              'build/registered-evidence/registered/registered_manifest.json'
+          )
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.registered-matched-tiles.v1'
+          assert evidence['evidence_level'] == (
+              'registered_streaming_tiles_bound_to_formally_proved_cores'
+          )
+          assert evidence['contract'] == {
+              'domain': 'quantized_integer_core_before_row_scaling',
+              'input_count': 6,
+              'output_count': 4,
+              'input_width': 8,
+              'accumulator_width': 12,
+              'input_bits': 48,
+              'output_bits': 48,
+              'latency_cycles': 1,
+              'valid_latency_cycles': 1,
+              'initiation_interval_cycles': 1,
+              'clock_edge': 'rising',
+              'reset_style': 'synchronous_active_high',
+              'reset_clears_pipeline': True,
+              'input_registered': True,
+              'output_registered': True,
+              'combinational_core_preserved': True,
+              'runtime_coefficient_reads_per_matvec': 0,
+          }
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert evidence['verification']['valid_vectors_executed'] == 272
+          assert evidence['verification']['schedule_cycles'] == 311
+          assert evidence['verification']['bubble_cycles'] == 39
+          assert evidence['verification']['simulation']['performed']
+          assert evidence['verification']['simulation']['passed']
+          assert evidence['verification']['simulation'][
+              'negative_control_detected'
+          ]
+          assert evidence['claims'] == {
+              'source_matched_integer_contract_verified': True,
+              'source_exhaustive_combinational_equivalence_verified': True,
+              'source_formal_negative_control_counterexample_found': True,
+              'registered_streaming_interface_generated': True,
+              'registered_backends_match_oracle_on_executed_schedule': True,
+              'one_cycle_latency_verified_on_executed_schedule': True,
+              'initiation_interval_one_verified_on_executed_schedule': True,
+              'reset_flush_verified_on_executed_schedule': True,
+              'simulation_negative_control_detected': True,
+              'sequential_formal_equivalence_verified': False,
+              'post_synthesis_ppa_measured': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'power_estimated': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          PY
+      - name: Upload registered-tile evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-registered-matched-tile-evidence
+          path: build/registered-evidence
+          if-no-files-found: error
+          retention-days: 30
