@@ -113,14 +113,8 @@ def _analysis_script(
             "read_verilog dut.v",
             f"link_design {module}",
             f"create_clock -name virtual_clock -period {period}",
-            (
-                "set_input_delay -clock virtual_clock "
-                f"{input_delay} [all_inputs]"
-            ),
-            (
-                "set_output_delay -clock virtual_clock "
-                f"{output_delay} [all_outputs]"
-            ),
+            (f"set_input_delay -clock virtual_clock {input_delay} [all_inputs]"),
+            (f"set_output_delay -clock virtual_clock {output_delay} [all_outputs]"),
             f"set_driving_cell -lib_cell {driving_cell} [all_inputs]",
             f"set_load {output_load} [all_outputs]",
             f'puts "HEPHAESTUS_PERIOD_NS {period}"',
@@ -190,7 +184,9 @@ def prepare_probe(
         "mapped_netlist_structurally_checked",
         "post_mapping_library_area_estimated",
     )
-    if not isinstance(claims, dict) or any(claims.get(name) is not True for name in required_claims):
+    if not isinstance(claims, dict) or any(
+        claims.get(name) is not True for name in required_claims
+    ):
         raise ProbeError("ABC area-delay source evidence is not fully verified")
 
     contract = manifest.get("contract")
@@ -428,7 +424,10 @@ def run_probe(
         raise ProbeError("OpenSTA binary digest differs from tool metadata")
 
     prepared = _load_json(root / "prepared.json")
-    if not isinstance(prepared, dict) or prepared.get("schema") != "hephaestus.opensta-sdc-prepared.v1":
+    if (
+        not isinstance(prepared, dict)
+        or prepared.get("schema") != "hephaestus.opensta-sdc-prepared.v1"
+    ):
         raise ProbeError("prepared OpenSTA manifest is missing or unsupported")
     analyses = prepared.get("analyses")
     if not isinstance(analyses, list) or not analyses:
