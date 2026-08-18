@@ -4,13 +4,11 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   update-workflows:
-    if: >-
-      github.head_ref == 'chore/actions-concurrency' &&
-      github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'chore/actions-concurrency'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -128,10 +126,12 @@ jobs:
           ruff format --check scripts/check_workflow_concurrency.py
           python scripts/check_workflow_concurrency.py
           python scripts/check_repo_hygiene.py
-      - name: Commit the workflow cleanup
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Cancel stale GitHub Actions runs per ref'
-          git push origin HEAD:chore/actions-concurrency
+      - name: Upload the verified permanent tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: actions-concurrency-generated-tree
+          path: |
+            .github/workflows
+            scripts/check_workflow_concurrency.py
+          if-no-files-found: error
+          retention-days: 7
