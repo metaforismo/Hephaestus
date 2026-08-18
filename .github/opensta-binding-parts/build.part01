@@ -1,6 +1,0 @@
-
-    json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-    encoding="utf-8",
-)
-print(json.dumps(metadata, indent=2, sort_keys=True))
-PY

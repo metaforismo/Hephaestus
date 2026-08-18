@@ -97,3 +97,84 @@ def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
             "detailed_max_path_reported": True,
             "pre_layout_timing_analyzed": True,
             "repeatability_verified": True,
+            "signoff_sta_performed": False,
+            "timing_closed": False,
+            "parasitics_annotated": False,
+            "placement_performed": False,
+            "routing_performed": False,
+            "power_estimated": False,
+            "post_layout_pex_verified": False,
+            "silicon_verified": False,
+        },
+    }
+    formal_path = tmp_path / "formal.json"
+    timing_path = tmp_path / "timing.json"
+    _write(formal_path, formal)
+    _write(timing_path, timing)
+    return formal_path, timing_path
+
+
+def test_binding_requires_exact_formal_digests(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    output = tmp_path / "binding.json"
+
+    result = build_opensta_formal_binding(formal_path, timing_path, output)
+
+    assert result["scope"]["formally_proved_timed_netlists"] == 3
+    assert result["scope"]["unique_mapped_verilog_digests"] == 3
+    assert result["claims"]["all_timed_netlists_formally_equivalent"]
+    assert result["claims"]["signoff_sta_performed"] is False
+    assert output.is_file()
+
+
+def test_binding_rejects_a_timing_digest_mismatch(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["results"][0]["mapped_verilog_sha256"] = "f" * 64
+    _write(timing_path, timing)
+
+    with pytest.raises(OpenSTABindingError, match="digest differs"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_rejects_an_unproved_netlist(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["backends"]["shared_dag"]["runs"]["unconstrained"][
+        "equivalence_verified"
+    ] = False
+    _write(formal_path, formal)
+
+    with pytest.raises(OpenSTABindingError, match="was not proved"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_requires_a_real_negative_control(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["negative_control"]["proof"]["counterexample_found"] = False
+    _write(formal_path, formal)
+
+    with pytest.raises(OpenSTABindingError, match="negative control"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_rejects_duplicate_mapped_digests(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    digest = formal["backends"]["shared_dag"]["runs"]["unconstrained"][
+        "mapped_verilog_sha256"
+    ]
+    formal["backends"]["naive_shift_add"]["runs"]["unconstrained"][
+        "mapped_verilog_sha256"
+    ] = digest
+    formal["backends"]["naive_shift_add"]["proofs"]["unconstrained"][
+        "mapped_verilog_sha256"
+    ] = digest
+    timing["results"][1]["mapped_verilog_sha256"] = digest
+    _write(formal_path, formal)
+    _write(timing_path, timing)
+
+    with pytest.raises(OpenSTABindingError, match="unexpectedly reuse"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
