@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from hephaestus.registered import (
+    RegisteredTileError,
+    _evaluate_packed,
+    _verification_schedule,
+    _verification_vectors,
+    build_registered_tiles,
+    emit_reference_core,
+    emit_registered_testbench,
+    emit_registered_wrapper,
+)
+from hephaestus.report import sha256_file
+
+BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _core(module: str) -> str:
+    return f"""module {module} (
+    input wire signed [7:0] x_flat,
+    output wire signed [11:0] y_flat
+);
+  wire signed [3:0] x0 = x_flat[0 +: 4];
+  wire signed [3:0] x1 = x_flat[4 +: 4];
+  wire signed [5:0] sx0 = {{{{2{{x0[3]}}}}, x0}};
+  wire signed [5:0] sx1 = {{{{2{{x1[3]}}}}, x1}};
+  assign y_flat[0 +: 6] = sx0 + (sx1 <<< 1);
+  assign y_flat[6 +: 6] = -sx0;
+endmodule
+"""
+
+
+def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    bundle = tmp_path / "matched"
+    bundle.mkdir()
+    codes_path = tmp_path / "codes.npy"
+    np.save(codes_path, np.array([[1, 2], [-1, 0]], dtype=np.int64), allow_pickle=False)
+
+    modules = {
+        "shared_dag": "tiny_shared",
+        "naive_shift_add": "tiny_naive",
+        "constant_multipliers": "tiny_multipliers",
+    }
+    filenames = {
+        "shared_dag": "shared_dag.sv",
+        "naive_shift_add": "naive_shift_add.sv",
+        "constant_multipliers": "constant_multipliers.sv",
+    }
+    artifact_labels = {
+        "shared_dag": "shared_dag_rtl",
+        "naive_shift_add": "naive_shift_add_rtl",
+        "constant_multipliers": "constant_multiplier_rtl",
+    }
+    digests: dict[str, str] = {"source_codes": sha256_file(codes_path)}
+    backend_manifest: dict[str, object] = {}
+    for backend in BACKENDS:
+        path = bundle / filenames[backend]
+        path.write_text(_core(modules[backend]), encoding="utf-8")
+        digests[artifact_labels[backend]] = sha256_file(path)
+        backend_manifest[backend] = {
+            "module": modules[backend],
+            "rtl": filenames[backend],
+            "runtime_coefficient_reads_per_matvec": 0,
+        }
+
+    manifest_path = bundle / "matched_manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "schema": "hephaestus.matched-baselines.v1",
+            "contract": {
+                "domain": "quantized_integer_core_before_row_scaling",
+                "input_count": 2,
+                "output_count": 2,
+                "input_width": 4,
+                "accumulator_width": 6,
+                "latency_cycles": 0,
+                "combinational": True,
+            },
+            "backends": backend_manifest,
+            "artifact_sha256": digests,
+            "claims": {"matched_integer_contract_verified": True},
+        },
+    )
+
+    formal_path = tmp_path / "formal_evidence.json"
+    formal_backends = {
+        backend: {
+            "module": modules[backend],
+            "source_rtl": filenames[backend],
+            "exhaustive_over_defined_inputs": True,
+            "proof": {
+                "performed": True,
+                "passed": True,
+                "proof_success": True,
+                "counterexample_found": False,
+            },
+        }
+        for backend in BACKENDS
+    }
+    _write_json(
+        formal_path,
+        {
+            "schema": "hephaestus.formal-equivalence-evidence.v1",
+            "evidence_level": "yosys_sat_combinational_equivalence",
+            "source": {
+                "matched_manifest_sha256": sha256_file(manifest_path),
+                "codes_sha256": sha256_file(codes_path),
+            },
+            "scope": {
+                "input_bits": 8,
+                "output_bits": 12,
+                "combinational": True,
+                "sequential_depth": 0,
+            },
+            "backends": formal_backends,
+            "negative_control": {
+                "proof": {
+                    "performed": True,
+                    "passed": True,
+                    "proof_success": False,
+                    "counterexample_found": True,
+                }
+            },
+            "claims": {
+                "matched_integer_contract_verified": True,
+                "exhaustive_combinational_equivalence_verified": True,
+                "negative_control_counterexample_found": True,
+                "sequential_equivalence_verified": False,
+            },
+        },
+    )
+    return bundle, codes_path, formal_path
+
+
+def test_registered_wrapper_has_one_cycle_valid_boundary() -> None:
+    wrapper = emit_registered_wrapper(
+        core_module="core",
+        module_name="registered_core",
+        input_bits=8,
+        output_bits=12,
+    )
+
+    assert "always @(posedge clk)" in wrapper
+    assert "if (reset)" in wrapper
+    assert "x_q <= x_flat;" in wrapper
+    assert "valid_q <= valid_in;" in wrapper
+    assert "valid_out <= valid_q;" in wrapper
+    assert "y_flat <= y_comb;" in wrapper
+
+
+def test_fault_wrapper_is_data_dependent() -> None:
+    wrapper = emit_registered_wrapper(
+        core_module="core",
+        module_name="faulty_core",
+        input_bits=8,
+        output_bits=12,
+        inject_fault=True,
+    )
+
+    assert "(x_q[0] & valid_q)" in wrapper
+    assert "y_flat <= y_faulted;" in wrapper
+
+
+def test_reference_core_checks_accumulator_width() -> None:
+    codes = np.array([[4, 4]], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="unsafe"):
+        emit_reference_core(
+            codes,
+            input_width=4,
+            accumulator_width=5,
+            module_name="reference",
+        )
+
+
+def test_python_oracle_packs_signed_output_lanes() -> None:
+    codes = np.array([[1, 2], [-1, 0]], dtype=np.int64)
+    packed_input = 3 | ((-2 & 0xF) << 4)
+
+    packed_output = _evaluate_packed(
+        codes,
+        packed_input,
+        input_width=4,
+        accumulator_width=6,
+    )
+
+    assert packed_output & 0x3F == (-1 & 0x3F)
+    assert (packed_output >> 6) & 0x3F == (-3 & 0x3F)
+
+
+def test_schedule_inserts_bubbles_without_losing_vectors() -> None:
+    vectors = list(range(15))
+    outputs = [value * 2 for value in vectors]
+
+    schedule = _verification_schedule(vectors, outputs)
+
+    assert sum(bool(item["valid"]) for item in schedule) == len(vectors)
+    assert len(schedule) > len(vectors)
+    assert any(not bool(item["valid"]) for item in schedule)
+
+
+def test_testbench_uses_an_independent_expected_pipeline() -> None:
+    testbench = emit_registered_testbench(
+        backend_modules={backend: f"{backend}_wrapper" for backend in BACKENDS},
+        schedule=[{"valid": True, "input": 1, "output": 2}],
+        input_bits=8,
+        output_bits=12,
+        valid_vector_count=1,
+        module_name="registered_tb",
+    )
+
+    assert "reg expected_valid;" in testbench
+    assert "reg [OUTPUT_BITS-1:0] expected_y;" in testbench
+    assert "expected_valid = schedule_valid[schedule_index];" in testbench
+    assert "y_shared_dag !== expected_y" in testbench
+    assert "reset did not clear output pipeline" in testbench
+
+
+def test_builder_binds_formal_evidence_and_emits_clean_claim_boundary(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    output = tmp_path / "registered"
+
+    manifest = build_registered_tiles(
+        bundle,
+        codes_path,
+        formal_path,
+        output,
+        module_name="tiny_registered",
+        random_vectors=8,
+        seed=13,
+        simulate=False,
+    )
+
+    assert manifest["schema"] == "hephaestus.registered-matched-tiles.v1"
+    assert manifest["contract"]["latency_cycles"] == 1
+    assert manifest["contract"]["initiation_interval_cycles"] == 1
+    assert manifest["contract"]["runtime_coefficient_reads_per_matvec"] == 0
+    assert manifest["claims"]["source_exhaustive_combinational_equivalence_verified"]
+    assert not manifest["claims"]["registered_backends_match_oracle_on_executed_schedule"]
+    assert manifest["claims"]["sequential_formal_equivalence_verified"] is False
+    assert manifest["claims"]["placement_performed"] is False
+    assert set(manifest["backends"]) == set(BACKENDS)
+    assert (output / "registered_manifest.json").is_file()
+    assert (output / "verification_oracle.json").is_file()
+    assert (output / "negative_control_registered.sv").is_file()
+
+
+def test_builder_rejects_formal_evidence_for_different_codes(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["source"]["codes_sha256"] = "0" * 64
+    _write_json(formal_path, formal)
+
+    with pytest.raises(RegisteredTileError, match="different quantized codes"):
+        build_registered_tiles(
+            bundle,
+            codes_path,
+            formal_path,
+            tmp_path / "registered",
+        )
+
+
+def test_builder_rejects_an_ineffective_formal_negative_control(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["negative_control"]["proof"]["counterexample_found"] = False
+    _write_json(formal_path, formal)
+
+    with pytest.raises(RegisteredTileError, match="required counterexample"):
+        build_registered_tiles(
+            bundle,
+            codes_path,
+            formal_path,
+            tmp_path / "registered",
+        )
+
+
+def test_verification_vectors_are_deterministic() -> None:
+    first = _verification_vectors(input_count=2, input_width=4, random_vectors=10, seed=99)
+    second = _verification_vectors(input_count=2, input_width=4, random_vectors=10, seed=99)
+
+    assert first == second
