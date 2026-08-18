@@ -33,6 +33,7 @@ jobs:
             flex \
             git \
             libeigen3-dev \
+            libfl-dev \
             libfmt-dev \
             libtool \
             libz-dev \
@@ -94,7 +95,8 @@ jobs:
           sha256sum "$sta" | tee "$root/opensta.binary.sha256.txt"
           ldd "$sta" | sort | tee "$root/opensta.ldd.txt"
           dpkg-query -W -f='${Package}\t${Version}\n' \
-            cmake gcc g++ tcl-dev swig bison flex libeigen3-dev libfmt-dev \
+            cmake gcc g++ tcl-dev swig bison flex libfl-dev \
+            libeigen3-dev libfmt-dev \
             | sort \
             | tee "$root/packages.tsv"
       - name: Smoke-test the built binary
