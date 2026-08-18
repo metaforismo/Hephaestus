@@ -67,13 +67,9 @@ def _require_claims(
     missing_true = [name for name in true_claims if claims.get(name) is not True]
     incorrect_false = [name for name in false_claims if claims.get(name) is not False]
     if missing_true:
-        raise OpenSTABindingError(
-            f"{context} is missing required true claims: {missing_true}"
-        )
+        raise OpenSTABindingError(f"{context} is missing required true claims: {missing_true}")
     if incorrect_false:
-        raise OpenSTABindingError(
-            f"{context} must keep these claims false: {incorrect_false}"
-        )
+        raise OpenSTABindingError(f"{context} must keep these claims false: {incorrect_false}")
     return claims
 
 
@@ -341,8 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(
-        "bound "
-        f"{result['scope']['formally_proved_timed_netlists']} formally proved timing results"
+        f"bound {result['scope']['formally_proved_timed_netlists']} formally proved timing results"
     )
     return 0
 
