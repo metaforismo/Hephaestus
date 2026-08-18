@@ -1,125 +1,198 @@
-name: Bootstrap pinned OpenSTA timing evidence
+name: Pinned OpenSTA pre-layout timing evidence
 
 on:
   push:
     branches:
+      - main
       - feat/opensta-timing-evidence
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  bootstrap:
-    if: github.actor != 'github-actions[bot]'
+  formally-proved-pre-layout-timing:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          ref: feat/opensta-timing-evidence
-      - name: Promote the verified probe into the permanent workflow
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis and OpenSTA build dependencies
         run: |
-          set -euo pipefail
-          python - <<'PY_BOOTSTRAP'
-          from pathlib import Path
-
-          template_path = Path('.github/opensta-production.yml')
-          workflow_path = Path('.github/workflows/opensta-timing-evidence.yml')
-          text = template_path.read_text(encoding='utf-8')
-          replacements = {
-              'name: Pinned OpenSTA SDC timing probe': (
-                  'name: Pinned OpenSTA SDC timing evidence'
-              ),
-              '      - research/opensta-sdc-probe': (
-                  '      - main\n      - feat/opensta-timing-evidence'
-              ),
-              '--module hephaestus_opensta_source': (
-                  '--module hephaestus_abc_area_delay_source'
-              ),
-              '--module hephaestus_opensta \\': (
-                  '--module hephaestus_abc_area_delay \\'
-              ),
-              '--seed 41': '--seed 43',
-              'name: hephaestus-pinned-opensta-sdc-timing-probe': (
-                  'name: hephaestus-pinned-opensta-sdc-timing-evidence'
-              ),
-              'retention-days: 14': 'retention-days: 30',
-          }
-          for old, new in replacements.items():
-              if old not in text:
-                  raise SystemExit(f'missing workflow replacement marker: {old!r}')
-              text = text.replace(old, new, 1)
-
-          marker = '      - name: Upload complete timing evidence\n'
-          if marker not in text:
-              raise SystemExit('missing timing artifact upload marker')
-          binding_step = '''      - name: Bind timed netlists to the formal regression reference
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            curl \
+            flex \
+            git \
+            'iverilog=12.0-2build2' \
+            libeigen3-dev \
+            libfl-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Build the captured OpenSTA binary
+        run: bash scripts/build_pinned_opensta.sh build/opensta-evidence/tooling
+      - name: Install and lint Hephaestus
         run: |
-          python - <<'PY_FORMAL_BINDING'
-          import hashlib
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/opensta_binding.py \
+            tests/test_opensta_binding.py \
+            scripts/opensta_sdc_probe.py \
+            scripts/opensta_sdc_probe_base.py
+          ruff format --check \
+            src/hephaestus/opensta_binding.py \
+            tests/test_opensta_binding.py \
+            scripts/opensta_sdc_probe.py \
+            scripts/opensta_sdc_probe_base.py
+          pytest tests/test_opensta_binding.py
+      - name: Fetch and verify the pinned IHP Liberty
+        run: |
+          python - <<'PY'
           import json
-          import shutil
           from pathlib import Path
 
-          probe_path = Path(
-              'build/opensta-sdc-probe/sdc/opensta_sdc_probe.json'
+          config = json.loads(
+              Path(
+                  'configs/technology/'
+                  'ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
           )
-          reference_path = Path(
-              'benchmarks/reference/'
-              'ihp_sg13g2_abc_area_delay_formal_tiny_v1.json'
+          root = Path('build/opensta-evidence/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'technology.json').write_text(
+              json.dumps(config, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
           )
-          probe = json.loads(probe_path.read_text(encoding='utf-8'))
-          reference = json.loads(reference_path.read_text(encoding='utf-8'))
-          assert reference['schema'] == (
-              'hephaestus.abc-area-delay-formal-reference.v1'
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
           )
-          assert reference['claim_boundary'][
-              'all_abc_sweep_mapped_netlists_equivalent'
-          ]
-          assert reference['case']['unique_mapped_netlists'] == 6
-          results = {
-              (item['backend'], item['label']): item
-              for item in probe['results']
-          }
-          assert len(results) == 6
-          for backend, expected in reference['expected'].items():
-              for label in expected['pareto_labels']:
-                  item = results[(backend, label)]
-                  assert item['mapped_verilog_sha256'] == (
-                      expected['runs'][label]['sha256']
-                  )
-                  assert item['repeatability_passed']
-                  assert item['attempts'] == 2
-          preserved = Path(
-              'build/opensta-sdc-probe/sdc/'
-              'source_abc_area_delay_formal_reference.json'
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
           )
-          shutil.copyfile(reference_path, preserved)
-          digest = hashlib.sha256(preserved.read_bytes()).hexdigest()
-          Path(
-              'build/opensta-sdc-probe/sdc/'
-              'source_abc_area_delay_formal_reference.sha256.txt'
-          ).write_text(digest + '\n', encoding='utf-8')
-          PY_FORMAL_BINDING
-'''
-          text = text.replace(marker, binding_step + marker, 1)
-          workflow_path.write_text(text, encoding='utf-8')
-          template_path.unlink()
-          PY_BOOTSTRAP
-          python - <<'PY_VALIDATE'
-          from pathlib import Path
-
-          path = Path('.github/workflows/opensta-timing-evidence.yml')
-          text = path.read_text(encoding='utf-8')
-          assert text.startswith('name: Pinned OpenSTA SDC timing evidence\n')
-          assert '\npermissions:\n  contents: read\n' in text
-          assert 'Bind timed netlists to the formal regression reference' in text
-          assert not Path('.github/opensta-production.yml').exists()
-          PY_VALIDATE
-      - name: Commit the permanent workflow
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/opensta-evidence/input/url.txt)" \
+            --output build/opensta-evidence/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/opensta-evidence/input/sha256.txt)" \
+            build/opensta-evidence/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build the matched ABC area-delay sweep
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Install pinned OpenSTA timing evidence workflow'
-          git push origin HEAD:feat/opensta-timing-evidence
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/opensta-evidence/source \
+            --module hephaestus_opensta_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/opensta-evidence/source \
+            --out build/opensta-evidence/matched \
+            --module hephaestus_opensta \
+            --verify-vectors 256 \
+            --seed 47 \
+            --simulate
+          python -m hephaestus.abc_timing build/opensta-evidence/matched \
+            --technology \
+              configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/opensta-evidence/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/opensta-evidence/area-delay \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prove every distinct ABC-mapped netlist
+        run: |
+          python -m hephaestus.abc_timing_formal \
+            build/opensta-evidence/area-delay \
+            --codes build/opensta-evidence/source/codes.npy \
+            --out build/opensta-evidence/formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Prepare and run matched OpenSTA analyses
+        run: |
+          python scripts/opensta_sdc_probe.py prepare \
+            build/opensta-evidence/area-delay \
+            --out build/opensta-evidence/timing \
+            --period-ns 4.0 \
+            --input-delay-ns 0.0 \
+            --output-delay-ns 0.0 \
+            --driving-cell sg13g2_buf_4 \
+            --output-load-pf 0.01 \
+            --labels unconstrained d4000ps
+          python scripts/opensta_sdc_probe.py run \
+            build/opensta-evidence/timing \
+            --sta build/opensta-evidence/tooling/opensta.bin \
+            --tool-metadata build/opensta-evidence/tooling/tool.json \
+            --attempts 2 \
+            --timeout 300
+      - name: Bind timing to the exact formal proofs
+        run: |
+          python -m hephaestus.opensta_binding \
+            build/opensta-evidence/formal/abc_area_delay_formal_evidence.json \
+            build/opensta-evidence/timing/opensta_sdc_probe.json \
+            --out build/opensta-evidence/opensta_formal_binding.json
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          root = Path('build/opensta-evidence')
+          binding = json.loads(
+              (root / 'opensta_formal_binding.json').read_text(encoding='utf-8')
+          )
+          assert binding['schema'] == 'hephaestus.opensta-formal-binding.v1'
+          assert binding['scope'] == {
+              'backends': [
+                  'shared_dag',
+                  'naive_shift_add',
+                  'constant_multipliers',
+              ],
+              'formally_proved_timed_netlists': 6,
+              'unique_mapped_verilog_digests': 6,
+              'combinational': True,
+              'sequential_depth': 0,
+              'parasitics_annotated': False,
+          }
+          assert len(binding['results']) == 6
+          for result in binding['results']:
+              assert result['formal_equivalence_verified']
+              assert result['timing_repeatability_verified']
+              assert result['attempts'] == 2
+              assert math.isfinite(result['opensta_data_delay_ns'])
+              assert result['opensta_data_delay_ns'] > 0
+          assert binding['claims'] == {
+              'all_timed_netlists_formally_equivalent': True,
+              'formal_negative_control_counterexample_found': True,
+              'opensta_pre_layout_timing_analyzed': True,
+              'timing_repeatability_verified': True,
+              'signoff_sta_performed': False,
+              'timing_closed': False,
+              'parasitics_annotated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'power_estimated': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          PY
+      - name: Upload complete formally bound timing evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pinned-opensta-formal-timing-evidence
+          path: |
+            build/opensta-evidence
+            !build/opensta-evidence/tooling/OpenSTA
+            !build/opensta-evidence/tooling/cudd-3.0.0
+          if-no-files-found: error
+          retention-days: 30
