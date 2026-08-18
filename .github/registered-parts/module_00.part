@@ -1,0 +1,188 @@
+"""Generate matched registered streaming tiles from formally proved combinational cores."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
+
+from .lower import required_accumulator_width
+from .report import sha256_file, write_json
+
+IntArray = NDArray[np.int64]
+
+_BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+_ARTIFACT_LABELS = {
+    "shared_dag": "shared_dag_rtl",
+    "naive_shift_add": "naive_shift_add_rtl",
+    "constant_multipliers": "constant_multiplier_rtl",
+}
+_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_BUBBLE_INTERVAL = 7
+
+
+class RegisteredTileError(RuntimeError):
+    """Raised when a registered matched-tile bundle cannot be produced safely."""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RegisteredTileError(f"cannot read JSON artifact {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RegisteredTileError(f"JSON artifact must be an object: {path}")
+    return value
+
+
+def _load_codes(path: Path) -> IntArray:
+    try:
+        values = np.load(path, allow_pickle=False)
+    except (OSError, ValueError) as exc:
+        raise RegisteredTileError(f"cannot read quantized codes {path}: {exc}") from exc
+    codes = np.asarray(values, dtype=np.int64)
+    if codes.ndim != 2 or codes.size == 0:
+        raise RegisteredTileError(f"codes must be a non-empty 2-D matrix, got {codes.shape}")
+    return codes
+
+
+def _safe_module(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _MODULE_RE.fullmatch(value) is None:
+        raise RegisteredTileError(f"{context} is not a safe module name: {value!r}")
+    return value
+
+
+def _safe_identifier(value: str, *, context: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_$]", "_", value)
+    if not normalized or normalized[0].isdigit():
+        normalized = f"h_{normalized}"
+    return _safe_module(normalized, context=context)
+
+
+def _require_digest(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise RegisteredTileError(f"{context} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _resolve_artifact(
+    root: Path,
+    raw_path: Any,
+    expected_digest: Any,
+    *,
+    context: str,
+) -> Path:
+    if not isinstance(raw_path, str) or not raw_path:
+        raise RegisteredTileError(f"{context}.path must be a non-empty string")
+    digest = _require_digest(expected_digest, context=f"{context}.sha256")
+    relative = Path(raw_path)
+    if relative.is_absolute():
+        raise RegisteredTileError(f"{context}.path must be relative")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise RegisteredTileError(f"{context}.path escapes the matched bundle") from exc
+    if not resolved.is_file():
+        raise RegisteredTileError(f"{context} does not exist: {resolved}")
+    actual_digest = sha256_file(resolved)
+    if actual_digest != digest:
+        raise RegisteredTileError(
+            f"{context} digest mismatch: expected {digest}, got {actual_digest}"
+        )
+    return resolved
+
+
+def _positive_int(value: Any, *, context: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise RegisteredTileError(f"{context} must be a positive integer")
+    return value
+
+
+def _signed_literal(width: int, value: int) -> str:
+    magnitude = abs(value)
+    literal = f"{width}'sd{magnitude}"
+    return literal if value >= 0 else f"-{literal}"
+
+
+def _proof_passed(value: Any, *, negative: bool, context: str) -> None:
+    if not isinstance(value, dict):
+        raise RegisteredTileError(f"{context} proof is malformed")
+    expected = {
+        "performed": True,
+        "passed": True,
+        "proof_success": not negative,
+        "counterexample_found": negative,
+    }
+    if any(value.get(key) is not expected_value for key, expected_value in expected.items()):
+        outcome = "counterexample" if negative else "proof"
+        raise RegisteredTileError(f"{context} did not preserve the required {outcome}")
+
+
+def _validate_formal_evidence(
+    path: Path,
+    *,
+    matched_manifest_path: Path,
+    codes_path: Path,
+    matched: dict[str, Any],
+    input_bits: int,
+    output_bits: int,
+) -> dict[str, Any]:
+    formal_path = path.resolve()
+    formal = _load_json(formal_path)
+    if formal.get("schema") != "hephaestus.formal-equivalence-evidence.v1":
+        raise RegisteredTileError("unsupported formal-equivalence evidence schema")
+    if formal.get("evidence_level") != "yosys_sat_combinational_equivalence":
+        raise RegisteredTileError("unsupported formal-equivalence evidence level")
+
+    claims = formal.get("claims")
+    required_claims = (
+        "matched_integer_contract_verified",
+        "exhaustive_combinational_equivalence_verified",
+        "negative_control_counterexample_found",
+    )
+    if not isinstance(claims, dict) or any(
+        claims.get(name) is not True for name in required_claims
+    ):
+        raise RegisteredTileError("source formal evidence is not fully verified")
+    if claims.get("sequential_equivalence_verified") is not False:
+        raise RegisteredTileError("source formal evidence has an invalid sequential claim")
+
+    source = formal.get("source")
+    if not isinstance(source, dict):
+        raise RegisteredTileError("source formal-evidence binding is malformed")
+    if source.get("matched_manifest_sha256") != sha256_file(matched_manifest_path):
+        raise RegisteredTileError("formal evidence is bound to a different matched manifest")
+    if source.get("codes_sha256") != sha256_file(codes_path):
+        raise RegisteredTileError("formal evidence is bound to different quantized codes")
+
+    scope = formal.get("scope")
+    if not isinstance(scope, dict):
+        raise RegisteredTileError("source formal-evidence scope is malformed")
+    if (
+        scope.get("input_bits") != input_bits
+        or scope.get("output_bits") != output_bits
+        or scope.get("combinational") is not True
+        or scope.get("sequential_depth") != 0
+    ):
+        raise RegisteredTileError("source formal-evidence scope differs from the matched contract")
+
+    matched_backends = matched.get("backends")
+    formal_backends = formal.get("backends")
+    if not isinstance(matched_backends, dict) or not isinstance(formal_backends, dict):
+        raise RegisteredTileError("source backend evidence is malformed")
+    if set(formal_backends) != set(_BACKENDS):
+        raise RegisteredTileError("formal evidence does not cover the three matched backends")
+    for backend_name in _BACKENDS:
+        match
