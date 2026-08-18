@@ -1,0 +1,52 @@
+name: Assemble OpenSTA formal binding implementation
+
+on:
+  push:
+    branches:
+      - feat/opensta-timing-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/opensta-timing-evidence
+      - name: Assemble and verify staged source files
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          root = Path('.github/opensta-binding-parts')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['schema'] == 'hephaestus.opensta-binding-parts.v1'
+          for specification in manifest['files'].values():
+              target = Path(specification['target'])
+              target.parent.mkdir(parents=True, exist_ok=True)
+              data = b''.join((root / part).read_bytes() for part in specification['parts'])
+              assert len(data) == specification['bytes']
+              assert hashlib.sha256(data).hexdigest() == specification['sha256']
+              target.write_bytes(data)
+          shutil.rmtree(root)
+          PY
+          chmod +x scripts/build_pinned_opensta.sh
+          python -m py_compile \
+            src/hephaestus/opensta_binding.py \
+            tests/test_opensta_binding.py
+          bash -n scripts/build_pinned_opensta.sh
+      - name: Commit assembled source files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add formally bound OpenSTA timing evidence support'
+          git push origin HEAD:feat/opensta-timing-evidence

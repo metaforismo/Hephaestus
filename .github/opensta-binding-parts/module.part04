@@ -1,0 +1,7 @@
+result['scope']['formally_proved_timed_netlists']} formally proved timing results"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

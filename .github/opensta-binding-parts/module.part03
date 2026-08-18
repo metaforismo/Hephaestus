@@ -1,0 +1,90 @@
+dingError(
+                f"period-minus-slack differs from reported delay for {backend_name}/{label}"
+            )
+
+        bound_results.append(
+            {
+                "backend": backend_name,
+                "label": label,
+                "mapped_verilog_sha256": digest,
+                "formal_proof_representative": representative,
+                "formal_equivalence_verified": True,
+                "timing_repeatability_verified": True,
+                "attempts": attempts,
+                "abc_library_area": raw_result.get("abc_library_area"),
+                "abc_delay_picoseconds": raw_result.get("abc_delay_picoseconds"),
+                "opensta_data_delay_ns": delay,
+                "virtual_clock_period_ns": period,
+                "worst_slack_ns": slack,
+            }
+        )
+
+    if seen_pairs != expected_pairs:
+        raise OpenSTABindingError("timing evidence does not cover every formally proved Pareto netlist")
+
+    binding = {
+        "schema": "hephaestus.opensta-formal-binding.v1",
+        "evidence_level": "opensta_pre_layout_timing_of_formally_proved_abc_netlists",
+        "source": {
+            "formal_evidence": formal_path.name,
+            "formal_evidence_sha256": sha256_file(formal_path),
+            "timing_evidence": timing_path.name,
+            "timing_evidence_sha256": sha256_file(timing_path),
+        },
+        "scope": {
+            "backends": list(_BACKENDS),
+            "formally_proved_timed_netlists": len(bound_results),
+            "unique_mapped_verilog_digests": len(seen_digests),
+            "combinational": True,
+            "sequential_depth": 0,
+            "parasitics_annotated": False,
+        },
+        "technology": formal.get("technology"),
+        "timing_contract": timing.get("assumptions"),
+        "tool": timing.get("tool"),
+        "results": sorted(bound_results, key=lambda item: (item["backend"], item["label"])),
+        "claims": {
+            "all_timed_netlists_formally_equivalent": True,
+            "formal_negative_control_counterexample_found": True,
+            "opensta_pre_layout_timing_analyzed": True,
+            "timing_repeatability_verified": True,
+            "signoff_sta_performed": False,
+            "timing_closed": False,
+            "parasitics_annotated": False,
+            "placement_performed": False,
+            "routing_performed": False,
+            "power_estimated": False,
+            "post_layout_pex_verified": False,
+            "silicon_verified": False,
+        },
+    }
+    output = output_path.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_json(output, binding)
+    return binding
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Bind OpenSTA timing results to exhaustive proofs of the exact netlists."
+    )
+    parser.add_argument("formal_evidence", type=Path)
+    parser.add_argument("timing_evidence", type=Path)
+    parser.add_argument("--out", type=Path, default=Path("build/opensta-formal-binding.json"))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    try:
+        result = build_opensta_formal_binding(
+            arguments.formal_evidence,
+            arguments.timing_evidence,
+            arguments.out,
+        )
+    except (OpenSTABindingError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        "bound "
+        f"{

@@ -1,0 +1,71 @@
+en_digests: set[str] = set()
+    for raw_result in timing_results:
+        if not isinstance(raw_result, dict):
+            raise OpenSTABindingError("timing result entry is malformed")
+        backend_name = raw_result.get("backend")
+        label = raw_result.get("label")
+        if not isinstance(backend_name, str) or not isinstance(label, str):
+            raise OpenSTABindingError("timing result is missing its backend or label")
+        pair = (backend_name, label)
+        if pair not in expected_pairs or pair in seen_pairs:
+            raise OpenSTABindingError(f"unexpected or duplicate timing result: {pair}")
+        seen_pairs.add(pair)
+
+        formal_backend = formal_backends[backend_name]
+        runs = formal_backend.get("runs")
+        proofs = formal_backend.get("proofs")
+        if not isinstance(runs, dict) or not isinstance(proofs, dict):
+            raise OpenSTABindingError(f"formal backend {backend_name!r} is malformed")
+        formal_run = runs.get(label)
+        if not isinstance(formal_run, dict) or formal_run.get("equivalence_verified") is not True:
+            raise OpenSTABindingError(f"timed netlist {backend_name}/{label} was not proved")
+
+        digest = raw_result.get("mapped_verilog_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise OpenSTABindingError(f"timing result {backend_name}/{label} has no valid digest")
+        if formal_run.get("mapped_verilog_sha256") != digest:
+            raise OpenSTABindingError(
+                f"timed netlist digest differs from formal proof for {backend_name}/{label}"
+            )
+        if digest in seen_digests:
+            raise OpenSTABindingError(
+                f"distinct timing results unexpectedly reuse mapped digest {digest}"
+            )
+        seen_digests.add(digest)
+
+        representative = formal_run.get("proof_representative")
+        proof = proofs.get(representative) if isinstance(representative, str) else None
+        _validate_positive_proof(
+            proof,
+            context=f"formal proof {backend_name}/{representative}",
+        )
+        if proof.get("mapped_verilog_sha256") != digest:
+            raise OpenSTABindingError(
+                f"proof representative digest differs for {backend_name}/{label}"
+            )
+
+        if raw_result.get("repeatability_passed") is not True:
+            raise OpenSTABindingError(f"timing result {backend_name}/{label} is not repeatable")
+        attempts = raw_result.get("attempts")
+        if type(attempts) is not int or attempts < 2:
+            raise OpenSTABindingError(f"timing result {backend_name}/{label} has too few attempts")
+        result_timing = raw_result.get("timing")
+        if not isinstance(result_timing, dict) or result_timing.get("returncode") != 0:
+            raise OpenSTABindingError(f"OpenSTA failed for {backend_name}/{label}")
+
+        period = _finite_number(
+            result_timing.get("period_ns"),
+            context=f"{backend_name}/{label}.period_ns",
+            positive=True,
+        )
+        delay = _finite_number(
+            result_timing.get("derived_data_delay_ns"),
+            context=f"{backend_name}/{label}.derived_data_delay_ns",
+            positive=True,
+        )
+        slack = _finite_number(
+            result_timing.get("worst_slack_ns"),
+            context=f"{backend_name}/{label}.worst_slack_ns",
+        )
+        if not math.isclose(period - slack, delay, rel_tol=0, abs_tol=1e-6):
+            raise OpenSTABin

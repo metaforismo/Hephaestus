@@ -1,0 +1,77 @@
+False,
+    }
+    if any(proof.get(key) is not expected for key, expected in required.items()):
+        raise OpenSTABindingError("formal negative control did not find the required fault")
+
+
+def _finite_number(value: Any, *, context: str, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise OpenSTABindingError(f"{context} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or (positive and result <= 0):
+        qualifier = "positive and finite" if positive else "finite"
+        raise OpenSTABindingError(f"{context} must be {qualifier}")
+    return result
+
+
+def build_opensta_formal_binding(
+    formal_evidence_path: Path,
+    timing_evidence_path: Path,
+    output_path: Path,
+) -> dict[str, Any]:
+    """Bind every timed netlist to a successful proof of the same mapped-Verilog digest."""
+
+    formal_path = formal_evidence_path.resolve()
+    timing_path = timing_evidence_path.resolve()
+    formal = _load_json(formal_path)
+    timing = _load_json(timing_path)
+
+    if formal.get("schema") != "hephaestus.abc-area-delay-formal-evidence.v1":
+        raise OpenSTABindingError("unsupported ABC area-delay formal evidence schema")
+    if formal.get("evidence_level") != "yosys_sat_abc_area_delay_mapped_equivalence":
+        raise OpenSTABindingError("unsupported ABC area-delay formal evidence level")
+    if timing.get("schema") != "hephaestus.opensta-sdc-probe.v1":
+        raise OpenSTABindingError("unsupported OpenSTA timing evidence schema")
+    if timing.get("evidence_level") != "opensta_sdc_pre_layout_timing_probe":
+        raise OpenSTABindingError("unsupported OpenSTA timing evidence level")
+
+    _require_claims(
+        formal.get("claims"),
+        true_claims=_FORMAL_REQUIRED_CLAIMS,
+        context="formal evidence",
+    )
+    _require_claims(
+        timing.get("claims"),
+        true_claims=_TIMING_REQUIRED_CLAIMS,
+        false_claims=_TIMING_FALSE_CLAIMS,
+        context="timing evidence",
+    )
+    _validate_negative_control(formal.get("negative_control"))
+
+    formal_backends = formal.get("backends")
+    timing_results = timing.get("results")
+    if not isinstance(formal_backends, dict) or set(formal_backends) != set(_BACKENDS):
+        raise OpenSTABindingError("formal evidence does not contain the three matched backends")
+    if not isinstance(timing_results, list) or not timing_results:
+        raise OpenSTABindingError("timing evidence contains no results")
+
+    expected_pairs: set[tuple[str, str]] = set()
+    for backend_name in _BACKENDS:
+        backend = formal_backends[backend_name]
+        if not isinstance(backend, dict):
+            raise OpenSTABindingError(f"formal backend {backend_name!r} is malformed")
+        if backend.get("all_pareto_runs_covered") is not True:
+            raise OpenSTABindingError(f"formal backend {backend_name!r} misses Pareto proofs")
+        pareto_labels = backend.get("pareto_labels")
+        if not isinstance(pareto_labels, list) or not pareto_labels:
+            raise OpenSTABindingError(f"formal backend {backend_name!r} has no Pareto labels")
+        expected_pairs.update((backend_name, str(label)) for label in pareto_labels)
+
+    if len(timing_results) != len(expected_pairs):
+        raise OpenSTABindingError(
+            "timing result count differs from the formally proved Pareto-netlist count"
+        )
+
+    bound_results: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    se

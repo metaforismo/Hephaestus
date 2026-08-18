@@ -1,0 +1,29 @@
+{
+  "schema": "hephaestus.opensta-binding-parts.v1",
+  "files": {
+    "build": {
+      "target": "scripts/build_pinned_opensta.sh",
+      "bytes": 3691,
+      "sha256": "b7820ff7956bf5b6297e3da87732d7a13070bfc5bf50e05b55ae3665be5e90ce",
+      "parts": ["build.part00", "build.part01"]
+    },
+    "module": {
+      "target": "src/hephaestus/opensta_binding.py",
+      "bytes": 14093,
+      "sha256": "94934383436abaf60faff65ae0be7f1ca48502b7629c017673f1e420980b57c4",
+      "parts": [
+        "module.part00",
+        "module.part01",
+        "module.part02",
+        "module.part03",
+        "module.part04"
+      ]
+    },
+    "tests": {
+      "target": "tests/test_opensta_binding.py",
+      "bytes": 6827,
+      "sha256": "7b88b49f45d690d4e04bc946b0279c75c034f3519cfa0a84acbb93f078466392",
+      "parts": ["tests.part00", "tests.part01"]
+    }
+  }
+}
