@@ -1,0 +1,192 @@
+
+
+def _format_number(value: float) -> str:
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
+def emit_sdc(config: dict[str, Any]) -> str:
+    """Emit the common sequential timing boundary for every matched backend."""
+
+    clock = config["clock"]
+    io = config["io"]
+    period = _format_number(float(clock["period_ns"]))
+    uncertainty = _format_number(float(clock["uncertainty_ns"]))
+    transition = _format_number(float(clock["transition_ns"]))
+    input_delay = _format_number(float(io["input_delay_ns"]))
+    output_delay = _format_number(float(io["output_delay_ns"]))
+    output_load = _format_number(float(io["output_load_pf"]))
+    driver = _safe_module(io["input_driver_cell"], context="input driver cell")
+    return "\n".join(
+        [
+            f"create_clock -name core_clock -period {period} [get_ports clk]",
+            f"set_clock_uncertainty {uncertainty} [get_clocks core_clock]",
+            f"set_clock_transition {transition} [get_clocks core_clock]",
+            "set non_clock_inputs [remove_from_collection [all_inputs] [get_ports clk]]",
+            f"set_input_delay {input_delay} -clock core_clock $non_clock_inputs",
+            f"set_output_delay {output_delay} -clock core_clock [all_outputs]",
+            f"set_driving_cell -lib_cell {driver} $non_clock_inputs",
+            f"set_load {output_load} [all_outputs]",
+            "",
+        ]
+    )
+
+
+def emit_config_mk(
+    config: dict[str, Any],
+    *,
+    wrapper_module: str,
+    nickname: str,
+) -> str:
+    """Emit one out-of-tree ORFS design configuration."""
+
+    module = _safe_module(wrapper_module, context="wrapper module")
+    safe_nickname = _safe_name(nickname, context="design nickname")
+    floorplan = config["floorplan"]
+    routing = config["routing"]
+    die = " ".join(_format_number(float(value)) for value in floorplan["die_area_um"])
+    core = " ".join(_format_number(float(value)) for value in floorplan["core_area_um"])
+    density = _format_number(float(floorplan["place_density"]))
+    return "\n".join(
+        [
+            "HEPHAESTUS_DESIGN_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))",
+            "",
+            f"export PLATFORM = {config['platform']}",
+            f"export DESIGN_NAME = {module}",
+            f"export DESIGN_NICKNAME = {safe_nickname}",
+            "",
+            "export VERILOG_FILES = \\",
+            "  $(HEPHAESTUS_DESIGN_DIR)/core.sv \\",
+            "  $(HEPHAESTUS_DESIGN_DIR)/wrapper.sv",
+            "export SDC_FILE = $(HEPHAESTUS_DESIGN_DIR)/constraints.sdc",
+            "",
+            f"export DIE_AREA = {die}",
+            f"export CORE_AREA = {core}",
+            f"export PLACE_DENSITY = {density}",
+            f"export MIN_ROUTING_LAYER = {routing['minimum_layer']}",
+            f"export MAX_ROUTING_LAYER = {routing['maximum_layer']}",
+            "",
+        ]
+    )
+
+
+def prepare_openroad_designs(
+    registered_bundle: Path,
+    config_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Prepare three matched out-of-tree ORFS designs from one registered bundle."""
+
+    source_root = registered_bundle.resolve()
+    physical_config_path = config_path.resolve()
+    output = output_dir.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    config = load_physical_config(physical_config_path)
+    registered, source_paths = _validate_registered_source(source_root)
+    source_manifest_path = source_root / "registered_manifest.json"
+    preserved_manifest = output / "source_registered_manifest.json"
+    preserved_config = output / "physical_config.json"
+    shutil.copyfile(source_manifest_path, preserved_manifest)
+    shutil.copyfile(physical_config_path, preserved_config)
+
+    designs: dict[str, Any] = {}
+    artifacts: dict[str, Path] = {
+        "source_registered_manifest": preserved_manifest,
+        "physical_config": preserved_config,
+    }
+    prefix = config["execution"]["design_nickname_prefix"]
+    variant = config["execution"]["flow_variant"]
+    for backend in BACKENDS:
+        specification = registered["backends"][backend]
+        design_dir = output / "designs" / backend
+        design_dir.mkdir(parents=True, exist_ok=True)
+        core_target = design_dir / "core.sv"
+        wrapper_target = design_dir / "wrapper.sv"
+        sdc_target = design_dir / "constraints.sdc"
+        make_target = design_dir / "config.mk"
+        shutil.copyfile(source_paths[backend][0], core_target)
+        shutil.copyfile(source_paths[backend][1], wrapper_target)
+        sdc_target.write_text(emit_sdc(config), encoding="utf-8")
+        nickname = f"{prefix}_{backend}"
+        make_target.write_text(
+            emit_config_mk(
+                config,
+                wrapper_module=specification["wrapper_module"],
+                nickname=nickname,
+            ),
+            encoding="utf-8",
+        )
+        design_artifacts = {
+            "core_rtl": core_target,
+            "wrapper_rtl": wrapper_target,
+            "sdc": sdc_target,
+            "config_mk": make_target,
+        }
+        for label, path in design_artifacts.items():
+            artifacts[f"{backend}_{label}"] = path
+        designs[backend] = {
+            "core_module": specification["core_module"],
+            "wrapper_module": specification["wrapper_module"],
+            "nickname": nickname,
+            "flow_variant": variant,
+            "design_dir": design_dir.relative_to(output).as_posix(),
+            "expected_orfs_result_directory": (
+                f"results/{config['platform']}/{nickname}/{variant}"
+            ),
+            "artifacts": {
+                label: {
+                    "path": path.relative_to(output).as_posix(),
+                    "sha256": sha256_file(path),
+                }
+                for label, path in design_artifacts.items()
+            },
+        }
+
+    manifest = {
+        "schema": "hephaestus.openroad-physical-prepared.v1",
+        "evidence_level": "matched_registered_orfs_inputs_prepared",
+        "source": {
+            "registered_manifest": preserved_manifest.name,
+            "registered_manifest_sha256": sha256_file(preserved_manifest),
+            "registered_schema": registered["schema"],
+            "registered_contract": registered["contract"],
+        },
+        "physical_config": {
+            "path": preserved_config.name,
+            "sha256": sha256_file(preserved_config),
+            "config_id": config["config_id"],
+        },
+        "toolchain": config["toolchain"],
+        "platform": config["platform"],
+        "contract": {
+            "clock": config["clock"],
+            "io": config["io"],
+            "floorplan": config["floorplan"],
+            "routing": config["routing"],
+            "attempts_per_backend": config["execution"]["attempts_per_backend"],
+            "timeout_minutes": config["execution"]["timeout_minutes"],
+            "required_outputs": config["execution"]["required_outputs"],
+        },
+        "designs": designs,
+        "artifact_sha256": {
+            label: sha256_file(path) for label, path in sorted(artifacts.items())
+        },
+        "claims": {
+            "registered_source_bound_by_digest": True,
+            "three_matched_physical_inputs_prepared": True,
+            "openroad_flow_completed": False,
+            "placement_performed": False,
+            "routing_performed": False,
+            "physical_repeatability_verified": False,
+            "post_physical_equivalence_verified": False,
+            "independent_drc_verified": False,
+            "lvs_clean": False,
+            "activity_based_power_estimated": False,
+            "post_layout_pex_verified": False,
+            "foundry_signoff_complete": False,
+            "silicon_verified": False,
+        },
+    }
+    write_json(output / "openroad_prepared.json", manifest)
+    return manifest
