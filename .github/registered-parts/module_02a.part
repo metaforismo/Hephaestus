@@ -1,0 +1,108 @@
+= (1 << width) - 1
+    packed = 0
+    for index, value in enumerate(values):
+        packed |= (value & mask) << (index * width)
+    return packed
+
+
+def _unpack_signed_lanes(packed: int, *, count: int, width: int) -> list[int]:
+    mask = (1 << width) - 1
+    sign = 1 << (width - 1)
+    values: list[int] = []
+    for index in range(count):
+        raw = (packed >> (index * width)) & mask
+        values.append(raw - (1 << width) if raw & sign else raw)
+    return values
+
+
+def _evaluate_packed(
+    codes: IntArray,
+    packed_input: int,
+    *,
+    input_width: int,
+    accumulator_width: int,
+) -> int:
+    lanes = _unpack_signed_lanes(
+        packed_input,
+        count=int(codes.shape[1]),
+        width=input_width,
+    )
+    minimum = -(1 << (accumulator_width - 1))
+    maximum = (1 << (accumulator_width - 1)) - 1
+    outputs: list[int] = []
+    for row in codes:
+        value = sum(int(coefficient) * lane for coefficient, lane in zip(row, lanes, strict=True))
+        if value < minimum or value > maximum:
+            raise RegisteredTileError(
+                f"oracle output {value} does not fit signed {accumulator_width}-bit lane"
+            )
+        outputs.append(value)
+    return _pack_lanes(outputs, accumulator_width)
+
+
+def _verification_vectors(
+    *,
+    input_count: int,
+    input_width: int,
+    random_vectors: int,
+    seed: int,
+) -> list[int]:
+    if random_vectors < 0:
+        raise ValueError("random_vectors must be non-negative")
+    minimum = -(1 << (input_width - 1))
+    maximum = (1 << (input_width - 1)) - 1
+    lane_sets: list[list[int]] = [
+        [0] * input_count,
+        [maximum] * input_count,
+        [minimum] * input_count,
+        [-1] * input_count,
+    ]
+    for index in range(input_count):
+        positive = [0] * input_count
+        positive[index] = maximum
+        lane_sets.append(positive)
+        negative = [0] * input_count
+        negative[index] = minimum
+        lane_sets.append(negative)
+    vectors = [_pack_lanes(values, input_width) for values in lane_sets]
+    rng = random.Random(seed)
+    input_bits = input_count * input_width
+    vectors.extend(rng.getrandbits(input_bits) for _ in range(random_vectors))
+    return list(dict.fromkeys(vectors))
+
+
+def _verification_schedule(
+    vectors: list[int],
+    outputs: list[int],
+) -> list[dict[str, int | bool]]:
+    if len(vectors) != len(outputs):
+        raise ValueError("verification inputs and outputs must have equal length")
+    schedule: list[dict[str, int | bool]] = []
+    for index, (packed_input, packed_output) in enumerate(zip(vectors, outputs, strict=True)):
+        schedule.append(
+            {
+                "valid": True,
+                "input": packed_input,
+                "output": packed_output,
+            }
+        )
+        if index % _BUBBLE_INTERVAL == _BUBBLE_INTERVAL // 2:
+            schedule.append({"valid": False, "input": 0, "output": 0})
+    return schedule
+
+
+def emit_registered_testbench(
+    *,
+    backend_modules: dict[str, str],
+    schedule: list[dict[str, int | bool]],
+    input_bits: int,
+    output_bits: int,
+    valid_vector_count: int,
+    module_name: str,
+) -> str:
+    """Emit an oracle-driven streaming testbench with continuous traffic and bubbles."""
+
+    if set(backend_modules) != set(_BACKENDS):
+        raise ValueError("registered testbench requires the three matched backends")
+    if input_bits <= 0 or output_bits <= 0 or valid_vector_count <= 0:
+        raise ValueError("registered testbench d
