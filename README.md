@@ -14,11 +14,14 @@ exist as shifts, signs, wires, and shared addition nodes.
 > evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
 > exhaustive SAT equivalence of mapped standard-cell netlists, technology-aware ABC area-delay
 > sweeps under versioned input-driver and output-load assumptions, exhaustive SAT proof of every
-> distinct netlist produced by that sweep, and pinned OpenSTA pre-layout timing of the six formally
-> proved Pareto netlists with digest-level proof binding.
+> distinct netlist produced by that sweep, pinned OpenSTA pre-layout timing of the six formally
+> proved Pareto netlists with digest-level proof binding, and matched registered streaming wrappers
+> verified against an independent arithmetic oracle with bubbles, reset checks, and a negative
+> control.
 >
-> **Not claimed:** a complete transformer compiler, sign-off timing or power closure, competitive
-> post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
+> **Not claimed:** a complete transformer compiler, unbounded sequential formal equivalence,
+> sign-off timing or power closure, competitive post-layout PPA, 40,000 tokens/s, a 7 nm tapeout,
+> extracted energy, or measured silicon.
 
 ## Why this direction
 
@@ -195,6 +198,42 @@ has no placement, routing, extracted RC, power, DRC, LVS, PEX, or silicon claim.
 [Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md) for the pinned toolchain, six
 netlist digests, regression reference, artifact provenance, repeatability rule, and claim boundary.
 
+## First registered streaming tile result
+
+The same three matched integer cores now have identical synchronous wrappers with registered input
+and output buses, synchronous active-high reset, and a one-bit valid pipeline. A transaction
+accepted at edge `N` is returned at edge `N + 1`, while the interface can still accept one new
+transaction per cycle.
+
+For the bundled 4×6 case, the pinned registered regression executes:
+
+```text
+valid transactions:    272
+scheduled cycles:      311
+intentional bubbles:    39
+value latency:           1 cycle
+valid latency:           1 cycle
+initiation interval:     1 cycle
+runtime weight reads:    0 per mat-vec
+```
+
+The expected outputs are generated directly from `codes.npy` by a Python arithmetic oracle. The
+schedule combines consecutive valid transactions, bubbles, signed extrema, deterministic corner
+cases, and seeded random inputs. All three wrappers match the oracle. Reset clears both output and
+valid state, and a data-dependent fault injected into only the shared-DAG wrapper is detected by a
+separate negative-control simulation.
+
+The qualifying evidence artifact has SHA-256
+`2527c95a904598d10526b1740b1110db788ccf2fffeb7674e03eca0456834e8a`. The regression reference
+pins the source-core, wrapper, reference, oracle, and testbench digests rather than accepting a
+result by backend name alone.
+
+This is registered streaming simulation bound to exhaustively proved combinational source cores.
+It is not unbounded sequential formal proof, frequency closure, mapped sequential PPA, placement,
+routing, extracted RC, activity-based power, DRC/LVS/PEX, or silicon evidence. See
+[Registered matched tiles](docs/REGISTERED_TILES.md) for the interface, oracle, artifact bundle,
+negative control, regression reference, reproduction commands, and claim boundary.
+
 ## Research thesis
 
 Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
@@ -221,6 +260,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [ABC area-delay evidence](docs/ABC_AREA_DELAY.md),
 [ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md),
 [Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md),
+[Registered matched tiles](docs/REGISTERED_TILES.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
