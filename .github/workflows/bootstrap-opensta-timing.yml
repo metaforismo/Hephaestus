@@ -1,0 +1,40 @@
+name: Bootstrap permanent OpenSTA timing workflow
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: >-
+      github.head_ref == 'feat/opensta-timing-evidence' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/opensta-timing-evidence
+      - name: Execute the reviewed bootstrap payload
+        run: |
+          set -euo pipefail
+          awk "/python - <<'PY_BOOTSTRAP'/{flag=1; next} /^          PY_BOOTSTRAP$/{flag=0} flag" \
+            .github/workflows/opensta-timing-evidence.yml \
+            | sed 's/^          //' \
+            > /tmp/bootstrap_opensta.py
+          python /tmp/bootstrap_opensta.py
+          grep -Fx 'name: Pinned OpenSTA SDC timing evidence' \
+            .github/workflows/opensta-timing-evidence.yml
+          grep -F 'Bind timed netlists to the formal regression reference' \
+            .github/workflows/opensta-timing-evidence.yml
+          test ! -e .github/opensta-production.yml
+          rm .github/workflows/bootstrap-opensta-timing.yml
+      - name: Commit the permanent workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Install pinned OpenSTA timing evidence workflow'
+          git push origin HEAD:feat/opensta-timing-evidence
