@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,9 @@ class OpenSTABindingError(RuntimeError):
 
 
 _BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _FORMAL_REQUIRED_CLAIMS = (
     "abc_area_delay_source_evidence_verified",
     "all_abc_sweep_mapped_netlists_equivalent",
@@ -73,6 +77,29 @@ def _require_claims(
     return claims
 
 
+def _required_digest(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise OpenSTABindingError(f"{context} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _finite_number(value: Any, *, context: str, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise OpenSTABindingError(f"{context} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or (positive and result <= 0):
+        qualifier = "positive and finite" if positive else "finite"
+        raise OpenSTABindingError(f"{context} must be {qualifier}")
+    return result
+
+
+def _nonnegative_number(value: Any, *, context: str) -> float:
+    result = _finite_number(value, context=context)
+    if result < 0:
+        raise OpenSTABindingError(f"{context} must be non-negative")
+    return result
+
+
 def _validate_positive_proof(proof: Any, *, context: str) -> None:
     if not isinstance(proof, dict):
         raise OpenSTABindingError(f"{context} proof is malformed")
@@ -107,14 +134,122 @@ def _validate_negative_control(value: Any) -> None:
         raise OpenSTABindingError("formal negative control did not find the required fault")
 
 
-def _finite_number(value: Any, *, context: str, positive: bool = False) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise OpenSTABindingError(f"{context} must be numeric")
-    result = float(value)
-    if not math.isfinite(result) or (positive and result <= 0):
-        qualifier = "positive and finite" if positive else "finite"
-        raise OpenSTABindingError(f"{context} must be {qualifier}")
-    return result
+def _validate_source_chain(
+    formal: dict[str, Any],
+    timing: dict[str, Any],
+) -> dict[str, str]:
+    formal_source = formal.get("source")
+    timing_source = timing.get("source")
+    technology = formal.get("technology")
+    if not isinstance(formal_source, dict) or not isinstance(timing_source, dict):
+        raise OpenSTABindingError("formal or timing source metadata is malformed")
+    if not isinstance(technology, dict):
+        raise OpenSTABindingError("formal technology metadata is malformed")
+    liberty = technology.get("liberty")
+    if not isinstance(liberty, dict):
+        raise OpenSTABindingError("formal Liberty metadata is malformed")
+
+    formal_abc = _required_digest(
+        formal_source.get("abc_area_delay_evidence_sha256"),
+        context="formal ABC area-delay source digest",
+    )
+    timing_abc = _required_digest(
+        timing_source.get("abc_area_delay_evidence_sha256"),
+        context="timing ABC area-delay source digest",
+    )
+    if formal_abc != timing_abc:
+        raise OpenSTABindingError("formal and timing ABC area-delay source digests differ")
+
+    formal_liberty = _required_digest(
+        liberty.get("sha256"),
+        context="formal Liberty digest",
+    )
+    timing_liberty = _required_digest(
+        timing_source.get("liberty_sha256"),
+        context="timing Liberty digest",
+    )
+    if formal_liberty != timing_liberty:
+        raise OpenSTABindingError("formal and timing Liberty digests differ")
+    return {
+        "abc_area_delay_evidence_sha256": formal_abc,
+        "liberty_sha256": formal_liberty,
+    }
+
+
+def _validate_tool(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise OpenSTABindingError("OpenSTA tool metadata is malformed")
+    if value.get("schema") != "hephaestus.opensta-tool.v1":
+        raise OpenSTABindingError("unsupported OpenSTA tool schema")
+    if value.get("repository") != "parallaxsw/OpenSTA":
+        raise OpenSTABindingError("OpenSTA tool metadata names an unexpected repository")
+    commit = value.get("commit")
+    if not isinstance(commit, str) or _COMMIT_RE.fullmatch(commit) is None:
+        raise OpenSTABindingError("OpenSTA commit must be a lowercase 40-character digest")
+    _required_digest(value.get("binary_sha256"), context="OpenSTA binary digest")
+    if value.get("binary_reproducibility_verified") is not False:
+        raise OpenSTABindingError("OpenSTA binary reproducibility must not be pre-claimed")
+    return value
+
+
+def _validate_timing_contract(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise OpenSTABindingError("OpenSTA timing contract is malformed")
+    period = _finite_number(
+        value.get("virtual_clock_period_ns"),
+        context="timing_contract.virtual_clock_period_ns",
+        positive=True,
+    )
+    input_delay = _nonnegative_number(
+        value.get("input_delay_ns"),
+        context="timing_contract.input_delay_ns",
+    )
+    output_delay = _nonnegative_number(
+        value.get("output_delay_ns"),
+        context="timing_contract.output_delay_ns",
+    )
+    load = _finite_number(
+        value.get("output_load_pf"),
+        context="timing_contract.output_load_pf",
+        positive=True,
+    )
+    driver = value.get("driving_cell")
+    if not isinstance(driver, str) or _MODULE_RE.fullmatch(driver) is None:
+        raise OpenSTABindingError("timing_contract.driving_cell is unsafe or missing")
+    if value.get("parasitics") is not None:
+        raise OpenSTABindingError("this evidence level requires absent parasitic annotation")
+    wire_model = value.get("wire_model")
+    if not isinstance(wire_model, str) or not wire_model:
+        raise OpenSTABindingError("timing_contract.wire_model must be a non-empty string")
+    return {
+        **value,
+        "virtual_clock_period_ns": period,
+        "input_delay_ns": input_delay,
+        "output_delay_ns": output_delay,
+        "output_load_pf": load,
+        "driving_cell": driver,
+    }
+
+
+def _require_matching_result_contract(
+    result: dict[str, Any],
+    contract: dict[str, Any],
+    *,
+    context: str,
+) -> None:
+    numeric_fields = (
+        "virtual_clock_period_ns",
+        "input_delay_ns",
+        "output_delay_ns",
+        "output_load_pf",
+    )
+    for field in numeric_fields:
+        actual = _finite_number(result.get(field), context=f"{context}.{field}")
+        expected = float(contract[field])
+        if not math.isclose(actual, expected, rel_tol=0, abs_tol=1e-12):
+            raise OpenSTABindingError(f"{context}.{field} differs from the timing contract")
+    if result.get("driving_cell") != contract["driving_cell"]:
+        raise OpenSTABindingError(f"{context}.driving_cell differs from the timing contract")
 
 
 def build_opensta_formal_binding(
@@ -150,6 +285,9 @@ def build_opensta_formal_binding(
         context="timing evidence",
     )
     _validate_negative_control(formal.get("negative_control"))
+    source_chain = _validate_source_chain(formal, timing)
+    tool = _validate_tool(timing.get("tool"))
+    timing_contract = _validate_timing_contract(timing.get("assumptions"))
 
     formal_backends = formal.get("backends")
     timing_results = timing.get("results")
@@ -186,9 +324,11 @@ def build_opensta_formal_binding(
         if not isinstance(backend_name, str) or not isinstance(label, str):
             raise OpenSTABindingError("timing result is missing its backend or label")
         pair = (backend_name, label)
+        context = f"timing result {backend_name}/{label}"
         if pair not in expected_pairs or pair in seen_pairs:
             raise OpenSTABindingError(f"unexpected or duplicate timing result: {pair}")
         seen_pairs.add(pair)
+        _require_matching_result_contract(raw_result, timing_contract, context=context)
 
         formal_backend = formal_backends[backend_name]
         runs = formal_backend.get("runs")
@@ -199,9 +339,10 @@ def build_opensta_formal_binding(
         if not isinstance(formal_run, dict) or formal_run.get("equivalence_verified") is not True:
             raise OpenSTABindingError(f"timed netlist {backend_name}/{label} was not proved")
 
-        digest = raw_result.get("mapped_verilog_sha256")
-        if not isinstance(digest, str) or len(digest) != 64:
-            raise OpenSTABindingError(f"timing result {backend_name}/{label} has no valid digest")
+        digest = _required_digest(
+            raw_result.get("mapped_verilog_sha256"),
+            context=f"{context}.mapped_verilog_sha256",
+        )
         if formal_run.get("mapped_verilog_sha256") != digest:
             raise OpenSTABindingError(
                 f"timed netlist digest differs from formal proof for {backend_name}/{label}"
@@ -246,11 +387,42 @@ def build_opensta_formal_binding(
             result_timing.get("worst_slack_ns"),
             context=f"{backend_name}/{label}.worst_slack_ns",
         )
+        tns = _finite_number(
+            result_timing.get("total_negative_slack_ns"),
+            context=f"{backend_name}/{label}.total_negative_slack_ns",
+        )
+        _required_digest(
+            result_timing.get("stdout_sha256"),
+            context=f"{backend_name}/{label}.stdout_sha256",
+        )
+        _required_digest(
+            result_timing.get("stderr_sha256"),
+            context=f"{backend_name}/{label}.stderr_sha256",
+        )
+        if not math.isclose(
+            period,
+            float(timing_contract["virtual_clock_period_ns"]),
+            rel_tol=0,
+            abs_tol=1e-12,
+        ):
+            raise OpenSTABindingError(
+                f"reported OpenSTA period differs from the contract for {backend_name}/{label}"
+            )
         if not math.isclose(period - slack, delay, rel_tol=0, abs_tol=1e-6):
             raise OpenSTABindingError(
                 f"period-minus-slack differs from reported delay for {backend_name}/{label}"
             )
 
+        abc_area = _finite_number(
+            raw_result.get("abc_library_area"),
+            context=f"{backend_name}/{label}.abc_library_area",
+            positive=True,
+        )
+        abc_delay = _finite_number(
+            raw_result.get("abc_delay_picoseconds"),
+            context=f"{backend_name}/{label}.abc_delay_picoseconds",
+            positive=True,
+        )
         bound_results.append(
             {
                 "backend": backend_name,
@@ -260,11 +432,12 @@ def build_opensta_formal_binding(
                 "formal_equivalence_verified": True,
                 "timing_repeatability_verified": True,
                 "attempts": attempts,
-                "abc_library_area": raw_result.get("abc_library_area"),
-                "abc_delay_picoseconds": raw_result.get("abc_delay_picoseconds"),
+                "abc_library_area": abc_area,
+                "abc_delay_picoseconds": abc_delay,
                 "opensta_data_delay_ns": delay,
                 "virtual_clock_period_ns": period,
                 "worst_slack_ns": slack,
+                "total_negative_slack_ns": tns,
             }
         )
 
@@ -281,6 +454,7 @@ def build_opensta_formal_binding(
             "formal_evidence_sha256": sha256_file(formal_path),
             "timing_evidence": timing_path.name,
             "timing_evidence_sha256": sha256_file(timing_path),
+            **source_chain,
         },
         "scope": {
             "backends": list(_BACKENDS),
@@ -291,8 +465,8 @@ def build_opensta_formal_binding(
             "parasitics_annotated": False,
         },
         "technology": formal.get("technology"),
-        "timing_contract": timing.get("assumptions"),
-        "tool": timing.get("tool"),
+        "timing_contract": timing_contract,
+        "tool": tool,
         "results": sorted(bound_results, key=lambda item: (item["backend"], item["label"])),
         "claims": {
             "all_timed_netlists_formally_equivalent": True,
