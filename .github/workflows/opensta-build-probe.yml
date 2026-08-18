@@ -1,0 +1,119 @@
+name: Pinned OpenSTA build probe
+
+on:
+  push:
+    branches:
+      - research/opensta-sdc-probe
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      OPENSTA_COMMIT: 2b751f0e8196b05ef4ed8246b7e27c63c967ec6d
+      CUDD_URL: https://raw.githubusercontent.com/davidkebo/cudd/main/cudd_versions/cudd-3.0.0.tar.gz
+      CUDD_SHA256: b8e966b4562c96a03e7fbea239729587d7b395d53cadcc39a7203b49cf7eeb69
+      CUDD_BYTES: '1175302'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            flex \
+            git \
+            libeigen3-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            wget
+      - name: Fetch and build pinned CUDD
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-build-probe"
+          mkdir -p "$root"
+          wget --quiet "$CUDD_URL" -O "$root/cudd-3.0.0.tar.gz"
+          printf '%s  %s\n' \
+            "$CUDD_SHA256" \
+            "$root/cudd-3.0.0.tar.gz" \
+            | sha256sum --check --strict
+          test "$(wc -c < "$root/cudd-3.0.0.tar.gz")" = "$CUDD_BYTES"
+          printf '%s\n' "$CUDD_URL" > "$root/cudd.url.txt"
+          printf '%s\n' "$CUDD_SHA256" > "$root/cudd.sha256.txt"
+          printf '%s\n' "$CUDD_BYTES" > "$root/cudd.bytes.txt"
+          tar -xzf "$root/cudd-3.0.0.tar.gz" -C "$root"
+          (
+            cd "$root/cudd-3.0.0"
+            ./configure > configure.stdout.txt 2> configure.stderr.txt
+            make -j2 > make.stdout.txt 2> make.stderr.txt
+          )
+      - name: Build exact OpenSTA commit
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-build-probe"
+          source="$root/OpenSTA"
+          mkdir -p "$source"
+          git -C "$source" init
+          git -C "$source" remote add origin \
+            https://github.com/parallaxsw/OpenSTA.git
+          git -C "$source" fetch --depth=1 origin "$OPENSTA_COMMIT"
+          git -C "$source" checkout --detach FETCH_HEAD
+          test "$(git -C "$source" rev-parse HEAD)" = "$OPENSTA_COMMIT"
+          printf '%s\n' "$OPENSTA_COMMIT" > "$root/opensta.commit.txt"
+
+          test -f /usr/include/FlexLexer.h
+          sha256sum /usr/include/FlexLexer.h \
+            | tee "$root/flex-header.sha256.txt"
+
+          cmake \
+            -S "$source" \
+            -B "$source/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCUDD_DIR="$root/cudd-3.0.0" \
+            -DFLEX_INCLUDE_DIR=/usr/include \
+            > "$root/opensta-cmake.stdout.txt" \
+            2> "$root/opensta-cmake.stderr.txt"
+          cmake --build "$source/build" --parallel 2 \
+            > "$root/opensta-build.stdout.txt" \
+            2> "$root/opensta-build.stderr.txt"
+
+          sta="$source/build/sta"
+          test -x "$sta"
+          sha256sum "$sta" | tee "$root/opensta.binary.sha256.txt"
+          ldd "$sta" | sort | tee "$root/opensta.ldd.txt"
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            cmake gcc g++ tcl-dev swig bison flex libeigen3-dev libfmt-dev \
+            | sort \
+            | tee "$root/packages.tsv"
+      - name: Smoke-test the built binary
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/build/opensta-build-probe"
+          cat > "$root/smoke.tcl" <<'TCL'
+          puts "HEPHAESTUS_OPENSTA_SMOKE_OK"
+          exit 0
+          TCL
+          "$root/OpenSTA/build/sta" "$root/smoke.tcl" \
+            > "$root/smoke.stdout.txt" \
+            2> "$root/smoke.stderr.txt"
+          grep -Fx 'HEPHAESTUS_OPENSTA_SMOKE_OK' "$root/smoke.stdout.txt"
+      - name: Upload complete build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pinned-opensta-build-probe
+          path: build/opensta-build-probe
+          if-no-files-found: error
+          retention-days: 14
