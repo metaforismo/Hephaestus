@@ -1,0 +1,55 @@
+name: One-shot assemble registered tiles
+
+on:
+  push:
+    branches:
+      - feat/registered-matched-tiles
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/registered-matched-tiles
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Assemble, format, and verify the implementation
+        run: |
+          set -euo pipefail
+          mkdir -p src/hephaestus tests
+          cat .github/registered-parts/module_*.part \
+            > src/hephaestus/registered.py
+          cat .github/registered-parts/tests_*.part \
+            > tests/test_registered.py
+          rm -rf .github/registered-parts
+          rm .github/workflows/assemble-registered-tiles.yml
+          python -m pip install -e '.[dev]'
+          ruff check --fix \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          ruff format \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          ruff check \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          ruff format --check \
+            src/hephaestus/registered.py \
+            tests/test_registered.py
+          pytest tests/test_registered.py
+          python -m hephaestus.registered --help
+      - name: Commit the assembled source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add formally bound registered matched tiles'
+          git push origin HEAD:feat/registered-matched-tiles
