@@ -71,9 +71,7 @@ def run_probe(
         try:
             run_dir.relative_to(root)
         except ValueError as exc:
-            raise base.ProbeError(
-                "prepared OpenSTA analysis path escapes its root"
-            ) from exc
+            raise base.ProbeError("prepared OpenSTA analysis path escapes its root") from exc
         metadata = base._load_json(run_dir / "metadata.json")
         if not isinstance(metadata, dict):
             raise base.ProbeError(f"metadata is malformed for {run_dir.name}")
@@ -88,10 +86,7 @@ def run_probe(
             for attempt in range(1, attempts + 1)
         ]
         first_signature = _signature(attempt_results[0])
-        if any(
-            _signature(result) != first_signature
-            for result in attempt_results[1:]
-        ):
+        if any(_signature(result) != first_signature for result in attempt_results[1:]):
             raise base.ProbeError(
                 f"OpenSTA report content is not byte-identical for {run_dir.name}"
             )
@@ -112,13 +107,9 @@ def run_probe(
             }
         )
 
-    mapped_digests = {
-        result["mapped_verilog_sha256"] for result in normalized
-    }
+    mapped_digests = {result["mapped_verilog_sha256"] for result in normalized}
     if len(mapped_digests) != len(normalized):
-        raise base.ProbeError(
-            "normalized OpenSTA results do not cover distinct mapped netlists"
-        )
+        raise base.ProbeError("normalized OpenSTA results do not cover distinct mapped netlists")
 
     summary = {
         "schema": "hephaestus.opensta-sdc-probe.v1",
@@ -172,9 +163,7 @@ def main(argv: list[str] | None = None) -> int:
                 attempts=arguments.attempts,
                 timeout_seconds=arguments.timeout,
             )
-            print(
-                f"verified {len(result['results'])} repeatable OpenSTA timing analyses"
-            )
+            print(f"verified {len(result['results'])} repeatable OpenSTA timing analyses")
     except (base.ProbeError, OSError, subprocess.SubprocessError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
