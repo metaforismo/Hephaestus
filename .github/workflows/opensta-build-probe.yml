@@ -73,6 +73,14 @@ jobs:
             ./configure > configure.stdout.txt 2> configure.stderr.txt
             make -j2 > make.stdout.txt 2> make.stderr.txt
           )
+          cp "$root/cudd-3.0.0/configure.stdout.txt" \
+            "$root/cudd-configure.stdout.txt"
+          cp "$root/cudd-3.0.0/configure.stderr.txt" \
+            "$root/cudd-configure.stderr.txt"
+          cp "$root/cudd-3.0.0/make.stdout.txt" \
+            "$root/cudd-make.stdout.txt"
+          cp "$root/cudd-3.0.0/make.stderr.txt" \
+            "$root/cudd-make.stderr.txt"
       - name: Build exact OpenSTA commit
         run: |
           set -euo pipefail
@@ -105,8 +113,10 @@ jobs:
 
           sta="$source/build/sta"
           test -x "$sta"
-          sha256sum "$sta" | tee "$root/opensta.binary.sha256.txt"
-          ldd "$sta" | sort | tee "$root/opensta.ldd.txt"
+          cp "$sta" "$root/opensta.bin"
+          sha256sum "$root/opensta.bin" \
+            | tee "$root/opensta.binary.sha256.txt"
+          ldd "$root/opensta.bin" | sort | tee "$root/opensta.ldd.txt"
           dpkg-query -W -f='${Package}\t${Version}\n' \
             cmake gcc g++ tcl-dev swig bison flex libfl-dev \
             libeigen3-dev libfmt-dev yosys yosys-abc iverilog \
@@ -121,7 +131,7 @@ jobs:
           puts "HEPHAESTUS_OPENSTA_SMOKE_OK"
           exit 0
           TCL
-          "$root/OpenSTA/build/sta" "$root/smoke.tcl" \
+          "$root/opensta.bin" "$root/smoke.tcl" \
             > "$root/smoke.stdout.txt" \
             2> "$root/smoke.stderr.txt"
           grep -Fx 'HEPHAESTUS_OPENSTA_SMOKE_OK' "$root/smoke.stdout.txt"
@@ -132,7 +142,7 @@ jobs:
           from pathlib import Path
 
           root = Path('build/opensta-sdc-probe/tooling')
-          binary = root / 'OpenSTA' / 'build' / 'sta'
+          binary = root / 'opensta.bin'
           banner = (root / 'smoke.stdout.txt').read_text(
               encoding='utf-8'
           ).splitlines()[0]
@@ -141,7 +151,9 @@ jobs:
               'repository': 'parallaxsw/OpenSTA',
               'commit': os.environ['OPENSTA_COMMIT'],
               'banner': banner,
+              'binary': binary.name,
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'binary_reproducibility_verified': False,
               'cudd': {
                   'url': os.environ['CUDD_URL'],
                   'sha256': os.environ['CUDD_SHA256'],
@@ -236,7 +248,7 @@ jobs:
         run: |
           python scripts/opensta_sdc_probe.py run \
             build/opensta-sdc-probe/sdc \
-            --sta build/opensta-sdc-probe/tooling/OpenSTA/build/sta \
+            --sta build/opensta-sdc-probe/tooling/opensta.bin \
             --tool-metadata build/opensta-sdc-probe/tooling/tool.json \
             --attempts 2 \
             --timeout 300
@@ -245,6 +257,7 @@ jobs:
           python - <<'PY'
           import json
           import math
+          import re
           from pathlib import Path
 
           path = Path(
@@ -258,9 +271,11 @@ jobs:
           assert evidence['tool']['commit'] == (
               '2b751f0e8196b05ef4ed8246b7e27c63c967ec6d'
           )
-          assert evidence['tool']['binary_sha256'] == (
-              'e5e9befd2f498780d30f6d3ce04b4e8103140aabbff850fe2cf236629f8d8063'
+          assert evidence['tool']['banner'].startswith('OpenSTA 3.1.0 ')
+          assert re.fullmatch(
+              r'[0-9a-f]{64}', evidence['tool']['binary_sha256']
           )
+          assert evidence['tool']['binary_reproducibility_verified'] is False
           assert evidence['assumptions'] == {
               'virtual_clock_period_ns': 4.0,
               'input_delay_ns': 0.0,
@@ -316,6 +331,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hephaestus-pinned-opensta-sdc-timing-probe
-          path: build/opensta-sdc-probe
+          path: |
+            build/opensta-sdc-probe
+            !build/opensta-sdc-probe/tooling/OpenSTA
+            !build/opensta-sdc-probe/tooling/cudd-3.0.0
           if-no-files-found: error
           retention-days: 14
