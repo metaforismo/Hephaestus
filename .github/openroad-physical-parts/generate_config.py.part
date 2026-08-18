@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+result_path = Path('/tmp/openroad_probe_result.json')
+result = json.loads(result_path.read_text(encoding='utf-8'))
+if result.get('schema') != 'hephaestus.openroad-registered-shared-probe-result.v1':
+    raise SystemExit('research probe result schema is unsupported')
+status = result.get('promotion_status')
+if not isinstance(status, dict) or status.get('research_probe_succeeded') is not True:
+    raise SystemExit('research probe did not qualify for promotion')
+if status.get('permanent_evidence_implemented') is not False:
+    raise SystemExit('research result already claims permanent evidence')
+probe = result.get('probe')
+if not isinstance(probe, dict) or probe.get('schema') != (
+    'hephaestus.openroad-registered-shared-probe.v1'
+):
+    raise SystemExit('research probe manifest is malformed')
+if probe.get('claims', {}).get('openroad_flow_completed') is not True:
+    raise SystemExit('research ORFS flow did not complete')
+if probe.get('claims', {}).get('matched_three_backend_physical_comparison_performed') is not False:
+    raise SystemExit('research probe overstates its comparison scope')
+
+repo_digests = probe.get('toolchain', {}).get('docker_repo_digests')
+if not isinstance(repo_digests, list):
+    raise SystemExit('research probe did not capture Docker repository digests')
+matching = [
+    digest
+    for digest in repo_digests
+    if isinstance(digest, str)
+    and re.fullmatch(r'openroad/orfs@sha256:[0-9a-f]{64}', digest)
+]
+if len(matching) != 1:
+    raise SystemExit(f'expected one immutable openroad/orfs digest, found {matching}')
+image = matching[0]
+versions = probe.get('toolchain', {}).get('captured_versions')
+if not isinstance(versions, list) or not versions:
+    raise SystemExit('research probe did not capture tool versions')
+head_lines = [line for line in versions if line.startswith('orfs_git_head=')]
+if len(head_lines) != 1:
+    raise SystemExit('research probe has no unique ORFS source identity')
+orfs_head = head_lines[0].split('=', 1)[1]
+if orfs_head != 'unavailable' and re.fullmatch(r'[0-9a-f]{40}', orfs_head) is None:
+    raise SystemExit(f'invalid ORFS source identity: {orfs_head}')
+
+contract = probe.get('contract')
+if not isinstance(contract, dict):
+    raise SystemExit('research physical contract is missing')
+expected_probe_contract = {
+    'platform': 'ihp-sg13g2',
+    'clock_period_ns': 4.0,
+    'clock_uncertainty_ns': 0.05,
+    'input_delay_ns': 0.0,
+    'output_delay_ns': 0.0,
+    'input_driver_cell': 'sg13g2_buf_4',
+    'output_load_pf': 0.01,
+    'die_area_um': [0.0, 0.0, 250.0, 250.0],
+    'core_area_um': [20.0, 20.0, 230.0, 230.0],
+    'place_density': 0.35,
+    'minimum_routing_layer': 'Metal2',
+    'maximum_routing_layer': 'Metal5',
+}
+if contract != expected_probe_contract:
+    raise SystemExit(f'research physical contract drifted: {contract}')
+artifact = result.get('artifact')
+if not isinstance(artifact, dict) or re.fullmatch(
+    r'sha256:[0-9a-f]{64}', str(artifact.get('digest', ''))
+) is None:
+    raise SystemExit('research artifact digest is absent or malformed')
+
+config = {
+    'schema': 'hephaestus.openroad-physical-config.v1',
+    'config_id': 'ihp-sg13g2-openroad-registered-tiny-v1',
+    'research_probe': {
+        'qualified': True,
+        'source_head_sha': result['source_head_sha'],
+        'workflow_run_id': result['workflow_run_id'],
+        'artifact_digest': artifact['digest'],
+        'probe_manifest_sha256': result['probe_manifest_sha256'],
+    },
+    'toolchain': {
+        'docker_image': image,
+        'docker_repo_digest': image,
+        'orfs_git_head': orfs_head,
+        'captured_versions': versions,
+    },
+    'platform': 'ihp-sg13g2',
+    'clock': {
+        'port': 'clk',
+        'period_ns': 4.0,
+        'uncertainty_ns': 0.05,
+        'transition_ns': 0.05,
+    },
+    'io': {
+        'input_delay_ns': 0.0,
+        'output_delay_ns': 0.0,
+        'input_driver_cell': 'sg13g2_buf_4',
+        'output_load_pf': 0.01,
+    },
+    'floorplan': {
+        'die_area_um': [0.0, 0.0, 250.0, 250.0],
+        'core_area_um': [20.0, 20.0, 230.0, 230.0],
+        'place_density': 0.35,
+    },
+    'routing': {
+        'minimum_layer': 'Metal2',
+        'maximum_layer': 'Metal5',
+    },
+    'execution': {
+        'attempts_per_backend': 2,
+        'timeout_minutes': 120,
+        'flow_variant': 'base',
+        'design_nickname_prefix': 'hephaestus_physical_tiny',
+        'required_outputs': {
+            'final_gds': '6_final.gds',
+            'final_def': '6_final.def',
+            'final_verilog': '6_final.v',
+            'final_open_db': '6_final.odb',
+            'final_spef': '6_final.spef',
+        },
+    },
+}
+output = Path('configs/physical/ihp_sg13g2_openroad_registered_v1.json')
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text(
+    json.dumps(config, indent=2, sort_keys=True) + '\n',
+    encoding='utf-8',
+)
