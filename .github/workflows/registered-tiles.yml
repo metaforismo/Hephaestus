@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/registered-matched-tiles
   pull_request:
   workflow_dispatch:
 
@@ -105,70 +104,94 @@ jobs:
               if completed.returncode != 0:
                   raise SystemExit(f'Yosys failed for registered backend {backend}')
           PY
-      - name: Validate the evidence boundary
+      - name: Validate the pinned regression and claim boundary
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
-          path = Path(
-              'build/registered-evidence/registered/registered_manifest.json'
+          root = Path('build/registered-evidence/registered')
+          evidence = json.loads(
+              (root / 'registered_manifest.json').read_text(encoding='utf-8')
           )
-          evidence = json.loads(path.read_text(encoding='utf-8'))
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/registered_matched_tiles_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+
           assert evidence['schema'] == 'hephaestus.registered-matched-tiles.v1'
           assert evidence['evidence_level'] == (
               'registered_streaming_tiles_bound_to_formally_proved_cores'
           )
-          assert evidence['contract'] == {
-              'domain': 'quantized_integer_core_before_row_scaling',
-              'input_count': 6,
-              'output_count': 4,
-              'input_width': 8,
-              'accumulator_width': 12,
-              'input_bits': 48,
-              'output_bits': 48,
-              'latency_cycles': 1,
-              'valid_latency_cycles': 1,
-              'initiation_interval_cycles': 1,
-              'clock_edge': 'rising',
-              'reset_style': 'synchronous_active_high',
-              'reset_clears_pipeline': True,
-              'input_registered': True,
-              'output_registered': True,
-              'combinational_core_preserved': True,
-              'runtime_coefficient_reads_per_matvec': 0,
-          }
-          assert set(evidence['backends']) == {
-              'shared_dag',
-              'naive_shift_add',
-              'constant_multipliers',
-          }
-          assert evidence['verification']['valid_vectors_executed'] == 272
-          assert evidence['verification']['schedule_cycles'] == 311
-          assert evidence['verification']['bubble_cycles'] == 39
-          assert evidence['verification']['simulation']['performed']
-          assert evidence['verification']['simulation']['passed']
-          assert evidence['verification']['simulation'][
-              'negative_control_detected'
-          ]
-          assert evidence['claims'] == {
-              'source_matched_integer_contract_verified': True,
-              'source_exhaustive_combinational_equivalence_verified': True,
-              'source_formal_negative_control_counterexample_found': True,
-              'registered_streaming_interface_generated': True,
-              'registered_backends_match_oracle_on_executed_schedule': True,
-              'one_cycle_latency_verified_on_executed_schedule': True,
-              'initiation_interval_one_verified_on_executed_schedule': True,
-              'reset_flush_verified_on_executed_schedule': True,
-              'simulation_negative_control_detected': True,
-              'sequential_formal_equivalence_verified': False,
-              'post_synthesis_ppa_measured': False,
-              'placement_performed': False,
-              'routing_performed': False,
-              'power_estimated': False,
-              'post_layout_pex_verified': False,
-              'silicon_verified': False,
-          }
+          assert reference['schema'] == (
+              'hephaestus.registered-matched-tiles-reference.v1'
+          )
+          assert reference['reference_id'] == 'registered-matched-tiles-tiny-v1'
+          assert evidence['contract'] == reference['contract']
+          assert evidence['claims'] == reference['claim_boundary']
+          assert evidence['source']['codes_sha256'] == (
+              reference['source_artifacts']['codes_sha256']
+          )
+
+          case = reference['case']
+          verification = evidence['verification']
+          assert verification['seed'] == case['seed']
+          assert verification['random_vectors_requested'] == (
+              case['random_vectors_requested']
+          )
+          assert verification['valid_vectors_executed'] == (
+              case['valid_vectors_executed']
+          )
+          assert verification['schedule_cycles'] == case['schedule_cycles']
+          assert verification['bubble_cycles'] == case['bubble_cycles']
+          assert verification['simulation']['performed']
+          assert verification['simulation']['passed']
+          assert verification['simulation']['negative_control_performed']
+          assert verification['simulation']['negative_control_detected']
+
+          for backend, specification in evidence['backends'].items():
+              assert specification['core_sha256'] == (
+                  reference['source_artifacts']['core_sha256'][backend]
+              )
+              assert specification['wrapper_sha256'] == (
+                  reference['generated_artifacts']['wrapper_sha256'][backend]
+              )
+              assert specification['runtime_coefficient_reads_per_matvec'] == 0
+
+          artifacts = evidence['artifact_sha256']
+          generated = reference['generated_artifacts']
+          assert artifacts['reference_core'] == generated['reference_core_sha256']
+          assert artifacts['verification_oracle'] == (
+              generated['verification_oracle_sha256']
+          )
+          assert artifacts['testbench'] == generated['testbench_sha256']
+          assert artifacts['negative_control_wrapper'] == (
+              generated['negative_control_wrapper_sha256']
+          )
+          assert artifacts['negative_control_testbench'] == (
+              generated['negative_control_testbench_sha256']
+          )
+
+          positive = verification['simulation']['positive']
+          negative = verification['simulation']['negative_control']
+          assert positive['iverilog_version'].startswith(
+              reference['tool']['iverilog_version_prefix']
+          )
+          assert positive['vvp_version'].startswith(
+              reference['tool']['vvp_version_prefix']
+          )
+          assert positive['returncode'] == 0
+          assert negative['returncode'] != 0
+          assert negative['expected_failure']
+          positive_stdout = (root / positive['simulation_stdout']).read_text(
+              encoding='utf-8'
+          )
+          negative_stdout = (root / negative['simulation_stdout']).read_text(
+              encoding='utf-8'
+          )
+          assert 'PASS registered matched tiles vectors=272' in positive_stdout
+          assert 'FAIL expected=' in negative_stdout
           PY
       - name: Upload registered-tile evidence
         uses: actions/upload-artifact@v4
