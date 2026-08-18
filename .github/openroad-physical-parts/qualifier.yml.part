@@ -1,0 +1,303 @@
+name: Qualify the first registered OpenROAD physical reference
+
+on:
+  push:
+    branches:
+      - feat/openroad-registered-physical-evidence
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  qualify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-registered-physical-evidence
+          fetch-depth: 1
+      - name: Wait for the exact-head permanent physical workflow
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          head_sha = os.environ['GITHUB_SHA']
+          target = 'Pinned IHP registered OpenROAD physical evidence'
+          deadline = time.time() + 125 * 60
+          selected = None
+          while time.time() < deadline:
+              response = subprocess.run(
+                  [
+                      'gh',
+                      'api',
+                      f'repos/{repository}/actions/runs',
+                      '-f',
+                      f'head_sha={head_sha}',
+                      '-f',
+                      'event=push',
+                      '-f',
+                      'per_page=100',
+                  ],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              runs = json.loads(response.stdout)['workflow_runs']
+              candidates = [
+                  run
+                  for run in runs
+                  if run['name'] == target and run['head_sha'] == head_sha
+              ]
+              if candidates:
+                  selected = max(candidates, key=lambda run: run['id'])
+                  print(
+                      f"physical run {selected['id']}: "
+                      f"{selected['status']} / {selected['conclusion']}",
+                      flush=True,
+                  )
+                  if selected['status'] == 'completed':
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit('timed out waiting for physical evidence')
+          if selected is None or selected['conclusion'] != 'success':
+              conclusion = None if selected is None else selected['conclusion']
+              raise SystemExit(f'physical evidence did not succeed: {conclusion}')
+          Path('build').mkdir(exist_ok=True)
+          Path('build/physical-run.json').write_text(
+              json.dumps(selected, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          Path('build/physical-run-id.txt').write_text(
+              f"{selected['id']}\n",
+              encoding='utf-8',
+          )
+          PY
+      - name: Download and inspect the qualifying evidence artifact
+        run: |
+          set -euo pipefail
+          run_id=$(cat build/physical-run-id.txt)
+          mkdir -p build/qualified
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-registered-openroad-physical-evidence \
+            --dir build/qualified
+      - name: Pin stable signatures, metrics, and provenance
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          from typing import Any
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          run = json.loads(Path('build/physical-run.json').read_text(encoding='utf-8'))
+          candidates = list(
+              Path('build/qualified').rglob('openroad_physical_evidence.json')
+          )
+          if len(candidates) != 1:
+              raise SystemExit(f'expected one physical manifest, found {len(candidates)}')
+          evidence = json.loads(candidates[0].read_text(encoding='utf-8'))
+          artifacts_response = subprocess.run(
+              ['gh', 'api', f"repos/{repository}/actions/runs/{run['id']}/artifacts"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          artifacts = json.loads(artifacts_response.stdout)['artifacts']
+          matching = [
+              artifact
+              for artifact in artifacts
+              if artifact['name']
+              == 'hephaestus-ihp-registered-openroad-physical-evidence'
+          ]
+          if len(matching) != 1:
+              raise SystemExit('qualifying physical artifact is missing or ambiguous')
+          artifact = matching[0]
+
+          def flatten(value: Any, prefix: str = '') -> dict[str, Any]:
+              result: dict[str, Any] = {}
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      child_prefix = f'{prefix}.{key}' if prefix else str(key)
+                      result.update(flatten(child, child_prefix))
+              elif isinstance(value, list):
+                  for index, child in enumerate(value):
+                      result.update(flatten(child, f'{prefix}[{index}]'))
+              else:
+                  result[prefix] = value
+              return result
+
+          include = (
+              'area',
+              'slack',
+              'tns',
+              'wirelength',
+              'violation',
+              'drc',
+              'utilization',
+              'instance',
+              'cell',
+              'clock_period',
+          )
+          exclude = (
+              'runtime',
+              'elapsed',
+              'memory',
+              'cpu',
+              'wall',
+              'timestamp',
+              'date',
+              'host',
+              'commit',
+              'version',
+          )
+          backend_reference = {}
+          for backend, result in evidence['backends'].items():
+              attempts = result['attempts']
+              first = flatten(attempts[0].get('metadata_payload'))
+              second = flatten(attempts[1].get('metadata_payload'))
+              selected_metrics = {
+                  key: value
+                  for key, value in first.items()
+                  if key in second
+                  and second[key] == value
+                  and type(value) in (int, float, bool)
+                  and any(token in key.lower() for token in include)
+                  and not any(token in key.lower() for token in exclude)
+              }
+              backend_reference[backend] = {
+                  'stable_signatures': result['repeatability']['stable_signatures'],
+                  'raw_open_db_identical': result['repeatability'][
+                      'raw_open_db_identical'
+                  ],
+                  'selected_stable_metrics': dict(sorted(selected_metrics.items())),
+              }
+
+          reference = {
+              'schema': 'hephaestus.openroad-registered-physical-reference.v1',
+              'reference_id': 'ihp-sg13g2-openroad-registered-tiny-v1',
+              'qualifying_run': {
+                  'head_sha': run['head_sha'],
+                  'workflow_run_id': run['id'],
+                  'workflow_url': run['html_url'],
+                  'artifact_id': artifact['id'],
+                  'artifact_digest': artifact.get('digest'),
+                  'artifact_size_in_bytes': artifact['size_in_bytes'],
+              },
+              'physical_config_sha256': evidence['source'][
+                  'physical_config_sha256'
+              ],
+              'registered_manifest_sha256': evidence['source'][
+                  'registered_manifest_sha256'
+              ],
+              'toolchain': evidence['toolchain'],
+              'contract': evidence['contract'],
+              'backends': backend_reference,
+              'canonical_gds_groups': evidence['canonical_gds_groups'],
+              'negative_control': {
+                  'mutation': evidence['negative_control']['mutation'],
+                  'detected': evidence['negative_control']['detected'],
+              },
+              'claim_boundary': evidence['claims'],
+          }
+          output = Path(
+              'benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json'
+          )
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(
+              json.dumps(reference, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+
+          def metric(backend: str, tokens: tuple[str, ...]) -> str:
+              values = backend_reference[backend]['selected_stable_metrics']
+              candidates = [
+                  (key, value)
+                  for key, value in values.items()
+                  if all(token in key.lower() for token in tokens)
+              ]
+              if not candidates:
+                  return 'not exposed'
+              _, value = sorted(candidates)[-1]
+              return str(value)
+
+          rows = []
+          for backend in ('shared_dag', 'naive_shift_add', 'constant_multipliers'):
+              signatures = backend_reference[backend]['stable_signatures']
+              rows.append(
+                  '| '
+                  + backend
+                  + ' | '
+                  + metric(backend, ('area',))
+                  + ' | '
+                  + metric(backend, ('slack',))
+                  + ' | `'
+                  + signatures['final_gds_canonical_sha256'][:16]
+                  + '…` |'
+              )
+          section = '\n'.join(
+              [
+                  '<!-- OPENROAD_PHYSICAL_RESULT_START -->',
+                  '## First matched registered OpenROAD physical result',
+                  '',
+                  'The three registered matched backends completed two clean IHP SG13G2 ',
+                  'ORFS placement-and-routing attempts under one clock, floorplan, I/O, ',
+                  'density, and routing-layer contract. Stable GDS geometry, routed DEF, ',
+                  'final netlist, and normalized SPEF signatures agree across attempts.',
+                  '',
+                  '| Backend | Stable area metric | Stable slack metric | Canonical GDS |',
+                  '|---|---:|---:|---|',
+                  *rows,
+                  '',
+                  'The complete machine-readable metrics and signatures are pinned in ',
+                  '`benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json`.',
+                  'This is matched open-source place-and-route evidence, not independent ',
+                  'DRC, LVS, activity-based power, validated PEX, foundry sign-off, or silicon.',
+                  '<!-- OPENROAD_PHYSICAL_RESULT_END -->',
+              ]
+          )
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          start = '<!-- OPENROAD_PHYSICAL_RESULT_START -->'
+          end = '<!-- OPENROAD_PHYSICAL_RESULT_END -->'
+          if start in text and end in text:
+              before = text.split(start, 1)[0]
+              after = text.split(end, 1)[1]
+              text = before + section + after
+          else:
+              marker = '\n## Research thesis\n'
+              if marker not in text:
+                  raise SystemExit('README research-thesis marker is missing')
+              text = text.replace(marker, '\n' + section + '\n' + marker, 1)
+          readme.write_text(text, encoding='utf-8')
+          PY
+      - name: Remove the one-shot qualifier and commit the reference
+        run: |
+          set -euo pipefail
+          rm .github/workflows/qualify-openroad-physical-reference.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Pin the first matched registered OpenROAD physical result'
+          git push origin HEAD:feat/openroad-registered-physical-evidence
