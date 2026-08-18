@@ -1,0 +1,478 @@
+name: Pinned IHP registered OpenROAD physical evidence
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/openroad-physical-evidence.yml'
+      - 'benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json'
+      - 'configs/physical/ihp_sg13g2_openroad_registered_v1.json'
+      - 'examples/tiny_weights.json'
+      - 'src/hephaestus/**'
+      - 'tests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/openroad-physical-evidence.yml'
+      - 'benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json'
+      - 'configs/physical/ihp_sg13g2_openroad_registered_v1.json'
+      - 'examples/tiny_weights.json'
+      - 'src/hephaestus/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned RTL proof tools and Hephaestus
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          python -m pip install -e '.[dev]'
+      - name: Lint and test the physical evidence builder
+        run: |
+          ruff check src/hephaestus/openroad_physical.py tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+          python -m hephaestus.openroad_physical --help
+      - name: Rebuild the exact registered matched source
+        run: |
+          set -euo pipefail
+          root=build/openroad/source-chain
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out "$root/source" \
+            --module hephaestus_physical_source \
+            --verify-samples 256
+          python -m hephaestus.baselines "$root/source" \
+            --out "$root/matched" \
+            --module hephaestus_physical \
+            --verify-vectors 256 \
+            --seed 83 \
+            --simulate
+          python -m hephaestus.formal "$root/matched" \
+            --codes "$root/source/codes.npy" \
+            --out "$root/formal" \
+            --max-input-bits 64 \
+            --timeout 300
+          python -m hephaestus.registered "$root/matched" \
+            --codes "$root/source/codes.npy" \
+            --formal-evidence "$root/formal/formal_evidence.json" \
+            --out "$root/registered" \
+            --module hephaestus_physical_tile \
+            --verify-vectors 256 \
+            --seed 83 \
+            --simulate
+      - name: Prepare the three matched ORFS designs
+        run: |
+          python -m hephaestus.openroad_physical prepare \
+            build/openroad/source-chain/registered \
+            --config configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            --out build/openroad/prepared
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          prepared = json.loads(
+              Path('build/openroad/prepared/openroad_prepared.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert prepared['schema'] == 'hephaestus.openroad-physical-prepared.v1'
+          assert set(prepared['designs']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert prepared['claims']['three_matched_physical_inputs_prepared']
+          assert not prepared['claims']['placement_performed']
+          PY
+      - name: Upload prepared physical inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-openroad-prepared-inputs
+          path: build/openroad/prepared
+          if-no-files-found: error
+          retention-days: 7
+
+  physical:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        backend:
+          - shared_dag
+          - naive_shift_add
+          - constant_multipliers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download the exact prepared inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-openroad-prepared-inputs
+          path: build/openroad/prepared
+      - name: Pull and verify the immutable ORFS container
+        run: |
+          set -euo pipefail
+          image=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          config = json.loads(Path('build/openroad/prepared/physical_config.json').read_text())
+          print(config['toolchain']['docker_image'])
+          PY
+          )
+          docker pull "$image" | tee build/openroad/docker-pull-${BACKEND}.log
+          docker image inspect "$image" > build/openroad/docker-inspect-${BACKEND}.json
+          docker image inspect "$image" --format '{{json .RepoDigests}}' \
+            > build/openroad/docker-digests-${BACKEND}.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          config = json.loads(Path('build/openroad/prepared/physical_config.json').read_text())
+          digests = json.loads(
+              Path(f"build/openroad/docker-digests-{os.environ['BACKEND']}.json").read_text()
+          )
+          assert config['toolchain']['docker_repo_digest'] in digests
+          PY
+      - name: Capture and match the image toolchain
+        run: |
+          set -euo pipefail
+          image=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('build/openroad/prepared/physical_config.json').read_text())['toolchain']['docker_image'])
+          PY
+          )
+          docker run --rm "$image" bash -lc '
+            set -e
+            source /OpenROAD-flow-scripts/env.sh
+            echo "orfs_git_head=$(git -C /OpenROAD-flow-scripts rev-parse HEAD 2>/dev/null || echo unavailable)"
+            echo "openroad=$(openroad -version 2>&1 | head -n 1)"
+            echo "yosys=$(yosys -V 2>&1 | head -n 1)"
+            echo "klayout=$(klayout -v 2>&1 | head -n 1 || true)"
+            test -d /OpenROAD-flow-scripts/flow/platforms/ihp-sg13g2
+          ' > build/openroad/captured-versions-${BACKEND}.txt
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          config = json.loads(Path('build/openroad/prepared/physical_config.json').read_text())
+          actual = Path(
+              f"build/openroad/captured-versions-{os.environ['BACKEND']}.txt"
+          ).read_text(encoding='utf-8').splitlines()
+          assert actual == config['toolchain']['captured_versions'], (actual, config['toolchain']['captured_versions'])
+          expected_head = config['toolchain']['orfs_git_head']
+          assert actual[0] == f'orfs_git_head={expected_head}'
+          PY
+      - name: Run two clean ORFS attempts for this backend
+        run: |
+          set -euo pipefail
+          image=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path('build/openroad/prepared/physical_config.json').read_text())['toolchain']['docker_image'])
+          PY
+          )
+          for attempt in 1 2; do
+            host_work="$GITHUB_WORKSPACE/build/openroad/work/${BACKEND}/attempt_${attempt}"
+            mkdir -p "$host_work"
+            docker run --rm \
+              -e HOME=/tmp \
+              -v "$GITHUB_WORKSPACE:/work" \
+              "$image" bash -lc "
+                set -euo pipefail
+                source /OpenROAD-flow-scripts/env.sh
+                make -C /OpenROAD-flow-scripts/flow \\
+                  DESIGN_CONFIG=/work/build/openroad/prepared/designs/${BACKEND}/config.mk \\
+                  FLOW_VARIANT=base \\
+                  WORK_HOME=/work/build/openroad/work/${BACKEND}/attempt_${attempt} \\
+                  finish
+                make -C /OpenROAD-flow-scripts/flow \\
+                  DESIGN_CONFIG=/work/build/openroad/prepared/designs/${BACKEND}/config.mk \\
+                  FLOW_VARIANT=base \\
+                  WORK_HOME=/work/build/openroad/work/${BACKEND}/attempt_${attempt} \\
+                  metadata-generate || true
+              " 2>&1 | tee "build/openroad/orfs-${BACKEND}-attempt-${attempt}.log"
+          done
+      - name: Normalize and bind each raw ORFS attempt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          backend = os.environ['BACKEND']
+          prepared_root = Path('build/openroad/prepared').resolve()
+          prepared_path = prepared_root / 'openroad_prepared.json'
+          prepared = json.loads(prepared_path.read_text(encoding='utf-8'))
+          config = json.loads(
+              (prepared_root / 'physical_config.json').read_text(encoding='utf-8')
+          )
+          design = prepared['designs'][backend]
+
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          for attempt in (1, 2):
+              work = Path(f'build/openroad/work/{backend}/attempt_{attempt}')
+              result = work / design['expected_orfs_result_directory']
+              reports = (
+                  work
+                  / 'reports'
+                  / config['platform']
+                  / design['nickname']
+                  / design['flow_variant']
+              )
+              run_root = Path(f'build/openroad/runs/{backend}/attempt_{attempt}')
+              final = run_root / 'final'
+              logs = run_root / 'logs'
+              final.mkdir(parents=True, exist_ok=True)
+              logs.mkdir(parents=True, exist_ok=True)
+              artifact_specs = {}
+              for label, filename in config['execution']['required_outputs'].items():
+                  source = result / filename
+                  if not source.is_file() or source.stat().st_size <= 0:
+                      raise SystemExit(f'missing or empty ORFS output {source}')
+                  target = final / filename
+                  shutil.copyfile(source, target)
+                  artifact_specs[label] = {
+                      'path': target.relative_to(run_root).as_posix(),
+                      'size_bytes': target.stat().st_size,
+                      'sha256': sha256(target),
+                  }
+              console = Path(f'build/openroad/orfs-{backend}-attempt-{attempt}.log')
+              shutil.copyfile(console, logs / 'orfs-console.log')
+              metadata_spec = None
+              metadata = reports / 'metadata.json'
+              if metadata.is_file():
+                  target = run_root / 'reports' / 'metadata.json'
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(metadata, target)
+                  metadata_spec = {
+                      'path': target.relative_to(run_root).as_posix(),
+                      'sha256': sha256(target),
+                  }
+              run = {
+                  'schema': 'hephaestus.openroad-physical-run.v1',
+                  'backend': backend,
+                  'attempt': attempt,
+                  'completed': True,
+                  'returncode': 0,
+                  'platform': config['platform'],
+                  'wrapper_module': design['wrapper_module'],
+                  'design_nickname': design['nickname'],
+                  'flow_variant': design['flow_variant'],
+                  'prepared_manifest_sha256': sha256(prepared_path),
+                  'toolchain': config['toolchain'],
+                  'artifacts': artifact_specs,
+                  'metadata': metadata_spec,
+              }
+              (run_root / 'run.json').write_text(
+                  json.dumps(run, indent=2, sort_keys=True) + '\n',
+                  encoding='utf-8',
+              )
+          PY
+      - name: Upload this backend's two physical attempts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-openroad-runs-${{ matrix.backend }}
+          path: build/openroad/runs
+          if-no-files-found: error
+          retention-days: 7
+
+  bind:
+    needs:
+      - prepare
+      - physical
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Download prepared inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-openroad-prepared-inputs
+          path: build/openroad/prepared
+      - name: Download all matched physical attempts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hephaestus-openroad-runs-*
+          path: build/openroad/runs
+          merge-multiple: true
+      - name: Require the digest-binding negative control
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          from hephaestus.openroad_physical import (
+              OpenROADPhysicalError,
+              bind_openroad_results,
+          )
+
+          prepared = Path('build/openroad/prepared')
+          prepared_manifest = prepared / 'openroad_prepared.json'
+          runs = Path('build/openroad/runs')
+          tampered = Path('build/openroad/tampered-runs')
+          shutil.copytree(runs, tampered)
+          original = runs / 'shared_dag' / 'attempt_1' / 'final' / '6_final.gds'
+          mutated = tampered / 'shared_dag' / 'attempt_1' / 'final' / '6_final.gds'
+          payload = bytearray(mutated.read_bytes())
+          if len(payload) < 32:
+              raise SystemExit('GDS is unexpectedly too small for a negative control')
+          payload[-16] ^= 1
+          mutated.write_bytes(payload)
+
+          def sha256(path: Path) -> str:
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          control_path = Path('build/openroad/negative_control.json')
+          provisional = {
+              'schema': 'hephaestus.openroad-physical-negative-control.v1',
+              'prepared_manifest_sha256': sha256(prepared_manifest),
+              'backend': 'shared_dag',
+              'attempt': 1,
+              'mutation': 'flip_one_byte_in_final_gds',
+              'original_sha256': sha256(original),
+              'mutated_sha256': sha256(mutated),
+              'detected': True,
+              'rejected_error': 'digest mismatch expected',
+          }
+          control_path.write_text(
+              json.dumps(provisional, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          try:
+              bind_openroad_results(
+                  prepared,
+                  tampered,
+                  control_path,
+                  Path('build/openroad/negative-output'),
+              )
+          except OpenROADPhysicalError as exc:
+              message = str(exc)
+              if 'digest mismatch' not in message:
+                  raise
+          else:
+              raise SystemExit('tampered GDS was accepted')
+          provisional['rejected_error'] = message
+          control_path.write_text(
+              json.dumps(provisional, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+      - name: Bind the matched physical evidence
+        run: |
+          python -m hephaestus.openroad_physical bind \
+            build/openroad/prepared \
+            --runs build/openroad/runs \
+            --negative-control build/openroad/negative_control.json \
+            --out build/openroad/evidence
+      - name: Validate claims and any pinned regression
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence_path = Path('build/openroad/evidence/openroad_physical_evidence.json')
+          evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == (
+              'hephaestus.openroad-registered-physical-evidence.v1'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert evidence['claims'] == {
+              'registered_source_bound_by_digest': True,
+              'three_matched_physical_inputs_prepared': True,
+              'all_three_openroad_flows_completed': True,
+              'placement_performed_for_all_backends': True,
+              'routing_performed_for_all_backends': True,
+              'routed_gds_generated_for_all_backends': True,
+              'routed_def_generated_for_all_backends': True,
+              'routed_open_db_generated_for_all_backends': True,
+              'spef_generated_for_all_backends': True,
+              'physical_repeatability_verified': True,
+              'digest_binding_negative_control_detected': True,
+              'matched_three_backend_physical_comparison_performed': True,
+              'post_physical_equivalence_verified': False,
+              'independent_drc_verified': False,
+              'lvs_clean': False,
+              'activity_based_power_estimated': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          reference_path = Path(
+              'benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json'
+          )
+          if reference_path.is_file():
+              reference = json.loads(reference_path.read_text(encoding='utf-8'))
+              assert reference['schema'] == (
+                  'hephaestus.openroad-registered-physical-reference.v1'
+              )
+              assert evidence['toolchain'] == reference['toolchain']
+              assert evidence['contract'] == reference['contract']
+              assert evidence['source']['physical_config_sha256'] == (
+                  reference['physical_config_sha256']
+              )
+              for backend in evidence['backends']:
+                  assert evidence['backends'][backend]['repeatability'][
+                      'stable_signatures'
+                  ] == reference['backends'][backend]['stable_signatures']
+          PY
+      - name: Upload complete matched OpenROAD physical evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-registered-openroad-physical-evidence
+          path: build/openroad
+          if-no-files-found: error
+          retention-days: 30
