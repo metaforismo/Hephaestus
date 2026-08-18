@@ -273,7 +273,9 @@ def build_opensta_formal_binding(
         )
 
     if seen_pairs != expected_pairs:
-        raise OpenSTABindingError("timing evidence does not cover every formally proved Pareto netlist")
+        raise OpenSTABindingError(
+            "timing evidence does not cover every formally proved Pareto netlist"
+        )
 
     binding = {
         "schema": "hephaestus.opensta-formal-binding.v1",
