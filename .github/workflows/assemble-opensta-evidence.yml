@@ -33,12 +33,19 @@ jobs:
           root = Path('.github/opensta-binding-parts')
           manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
           assert manifest['schema'] == 'hephaestus.opensta-binding-parts.v1'
-          for specification in manifest['files'].values():
+          for name, specification in manifest['files'].items():
               target = Path(specification['target'])
               target.parent.mkdir(parents=True, exist_ok=True)
               data = b''.join((root / part).read_bytes() for part in specification['parts'])
-              assert len(data) == specification['bytes']
-              assert hashlib.sha256(data).hexdigest() == specification['sha256']
+              actual_sha = hashlib.sha256(data).hexdigest()
+              print(
+                  f"{name}: bytes={len(data)} expected_bytes={specification['bytes']} "
+                  f"sha256={actual_sha} expected_sha256={specification['sha256']}"
+              )
+              if len(data) != specification['bytes']:
+                  raise SystemExit(f"{name}: staged byte count mismatch")
+              if actual_sha != specification['sha256']:
+                  raise SystemExit(f"{name}: staged digest mismatch")
               target.write_bytes(data)
           shutil.rmtree(root)
           PY
