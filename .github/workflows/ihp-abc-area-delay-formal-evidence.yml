@@ -183,7 +183,7 @@ jobs:
           assert negative['backend'] == 'shared_dag'
           assert negative['proof']['passed']
           assert negative['proof']['counterexample_found']
-          assert not negative['proof_success']
+          assert not negative['proof']['proof_success']
           assert not negative['proof']['unsupported_cell_error']
 
           assert evidence['claims'] == {
