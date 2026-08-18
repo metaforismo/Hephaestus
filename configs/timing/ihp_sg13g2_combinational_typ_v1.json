@@ -1,0 +1,15 @@
+{
+  "schema": "hephaestus.combinational-timing-contract.v1",
+  "contract_id": "ihp-sg13g2-combinational-typ-v1",
+  "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+  "virtual_clock_name": "HEPHAESTUS_VIRTUAL_CLOCK",
+  "virtual_clock_period_ns": 1000.0,
+  "input_delay_ns": 0.0,
+  "output_delay_ns": 0.0,
+  "input_transition_ns": 0.1,
+  "output_load_pf": 0.05,
+  "path_delay": "max",
+  "group_count": 10,
+  "digits": 6,
+  "purpose": "Matched combinational library timing characterization; not a product clock target."
+}
