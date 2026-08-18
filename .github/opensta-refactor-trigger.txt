@@ -1,0 +1,1 @@
+trigger one-shot OpenSTA timing flow consolidation
