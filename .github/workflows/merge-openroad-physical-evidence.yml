@@ -1,0 +1,203 @@
+name: One-shot merge registered OpenROAD physical evidence
+
+on:
+  push:
+    branches:
+      - feat/openroad-registered-physical-evidence
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: feat/openroad-registered-physical-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-registered-physical-evidence
+          fetch-depth: 2
+      - name: Wait until qualification has produced the permanent branch
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 5 * 60 * 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            git fetch --force origin \
+              "$FEATURE_BRANCH:refs/remotes/origin/$FEATURE_BRANCH"
+            git reset --hard "refs/remotes/origin/$FEATURE_BRANCH"
+            if [ -f benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json ] \
+              && [ -f src/hephaestus/openroad_physical.py ] \
+              && [ -f .github/workflows/openroad-physical-evidence.yml ] \
+              && [ ! -e .github/workflows/assemble-openroad-physical-evidence.yml ] \
+              && [ ! -e .github/workflows/qualify-openroad-physical-reference.yml ] \
+              && [ ! -d .github/openroad-physical-parts ]; then
+              exit 0
+            fi
+            sleep 30
+          done
+          echo 'physical reference did not qualify before the merge-gate deadline' >&2
+          exit 1
+      - name: Validate the qualified reference and remove this one-shot gate
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/ihp_sg13g2_openroad_registered_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+          assert reference['schema'] == (
+              'hephaestus.openroad-registered-physical-reference.v1'
+          )
+          assert reference['reference_id'] == (
+              'ihp-sg13g2-openroad-registered-tiny-v1'
+          )
+          assert set(reference['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert reference['negative_control'] == {
+              'mutation': 'flip_one_byte_in_final_gds',
+              'detected': True,
+          }
+          claims = reference['claim_boundary']
+          assert claims['all_three_openroad_flows_completed']
+          assert claims['physical_repeatability_verified']
+          assert claims['digest_binding_negative_control_detected']
+          assert claims['matched_three_backend_physical_comparison_performed']
+          assert claims['post_physical_equivalence_verified'] is False
+          assert claims['independent_drc_verified'] is False
+          assert claims['lvs_clean'] is False
+          assert claims['activity_based_power_estimated'] is False
+          assert claims['post_layout_pex_verified'] is False
+          assert claims['foundry_signoff_complete'] is False
+          assert claims['silicon_verified'] is False
+          PY
+          rm .github/workflows/merge-openroad-physical-evidence.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Finalize the matched registered OpenROAD evidence PR'
+          git push origin HEAD:"$FEATURE_BRANCH"
+          echo "FINAL_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Wait for every permanent exact-head workflow
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          head_sha = os.environ['FINAL_HEAD']
+          required = {
+              'CI',
+              'Evidence',
+              'Matched baselines',
+              'Synthesis evidence',
+              'Formal equivalence',
+              'IHP mapped evidence',
+              'IHP mapped formal equivalence',
+              'IHP ABC area-delay evidence',
+              'IHP ABC area-delay formal equivalence',
+              'Pinned OpenSTA pre-layout timing evidence',
+              'Registered matched tiles',
+              'Pinned IHP registered OpenROAD physical evidence',
+              'Repository hygiene',
+          }
+          deadline = time.time() + 5 * 60 * 60
+          while time.time() < deadline:
+              response = subprocess.run(
+                  [
+                      'gh',
+                      'api',
+                      f'repos/{repository}/actions/runs',
+                      '-f',
+                      f'head_sha={head_sha}',
+                      '-f',
+                      'event=pull_request',
+                      '-f',
+                      'per_page=100',
+                  ],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              runs = json.loads(response.stdout)['workflow_runs']
+              latest = {}
+              for run in runs:
+                  name = run['name']
+                  if name in required and (
+                      name not in latest or run['id'] > latest[name]['id']
+                  ):
+                      latest[name] = run
+              missing = sorted(required - set(latest))
+              pending = sorted(
+                  name
+                  for name, run in latest.items()
+                  if run['status'] != 'completed'
+              )
+              failed = {
+                  name: run['conclusion']
+                  for name, run in latest.items()
+                  if run['status'] == 'completed' and run['conclusion'] != 'success'
+              }
+              print(
+                  json.dumps(
+                      {
+                          'head': head_sha,
+                          'missing': missing,
+                          'pending': pending,
+                          'failed': failed,
+                      },
+                      sort_keys=True,
+                  ),
+                  flush=True,
+              )
+              if failed:
+                  raise SystemExit(f'exact-head workflows failed: {failed}')
+              if not missing and not pending:
+                  break
+              time.sleep(30)
+          else:
+              raise SystemExit('timed out waiting for exact-head workflows')
+          PY
+      - name: Mark ready, squash merge, and clean the research branch
+        run: |
+          set -euo pipefail
+          pr_number=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$FEATURE_BRANCH" \
+            --base main \
+            --state open \
+            --json number \
+            --jq '.[0].number')
+          test -n "$pr_number"
+          gh pr ready "$pr_number" --repo "$GITHUB_REPOSITORY"
+          gh pr merge "$pr_number" \
+            --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --delete-branch \
+            --match-head-commit "$FINAL_HEAD" \
+            --subject 'Add matched registered IHP OpenROAD physical evidence' \
+            --body 'Promote the qualified single-backend ORFS probe into a permanent three-backend physical evidence layer with two clean attempts per backend, immutable toolchain and physical contracts, normalized GDS/DEF/SPEF repeatability, exact artifact binding, a one-byte GDS negative control, a pinned regression reference, and explicit downstream claim boundaries.'
+          if git ls-remote --exit-code --heads origin \
+            research/openroad-registered-shared-probe >/dev/null 2>&1; then
+            git push origin --delete research/openroad-registered-shared-probe
+          fi
