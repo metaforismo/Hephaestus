@@ -1,0 +1,191 @@
+{
+  "case": {
+    "domain": "quantized_integer_core_before_row_scaling",
+    "input_bits": 48,
+    "latency_cycles": 0,
+    "output_bits": 48,
+    "source": "examples/tiny_weights.json",
+    "source_sweep_runs": 18,
+    "unique_mapped_netlists": 6
+  },
+  "claim_boundary": {
+    "all_abc_sweep_mapped_netlists_equivalent": true,
+    "all_pareto_mapped_netlists_equivalent": true,
+    "placement_performed": false,
+    "post_layout_pex_verified": false,
+    "routing_performed": false,
+    "sdc_timing_analyzed": false,
+    "signoff_sta_performed": false,
+    "silicon_verified": false,
+    "timing_closed": false
+  },
+  "expected": {
+    "constant_multipliers": {
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ],
+      "proof_groups": {
+        "d4000ps": {
+          "labels": [
+            "d16000ps",
+            "d4000ps",
+            "d8000ps"
+          ],
+          "sha256": "775059c9bc9c8b8e4b9de5ae841548091cee544dc19f351851483a8d55a384b6"
+        },
+        "unconstrained": {
+          "labels": [
+            "d1000ps",
+            "d2000ps",
+            "unconstrained"
+          ],
+          "sha256": "03e9ed6a84761fd841d0d2fc24d140b13bd08c05456e8f0249f55e26d81875cc"
+        }
+      },
+      "runs": {
+        "d1000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "03e9ed6a84761fd841d0d2fc24d140b13bd08c05456e8f0249f55e26d81875cc"
+        },
+        "d16000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "775059c9bc9c8b8e4b9de5ae841548091cee544dc19f351851483a8d55a384b6"
+        },
+        "d2000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "03e9ed6a84761fd841d0d2fc24d140b13bd08c05456e8f0249f55e26d81875cc"
+        },
+        "d4000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "775059c9bc9c8b8e4b9de5ae841548091cee544dc19f351851483a8d55a384b6"
+        },
+        "d8000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "775059c9bc9c8b8e4b9de5ae841548091cee544dc19f351851483a8d55a384b6"
+        },
+        "unconstrained": {
+          "proof_representative": "unconstrained",
+          "sha256": "03e9ed6a84761fd841d0d2fc24d140b13bd08c05456e8f0249f55e26d81875cc"
+        }
+      }
+    },
+    "naive_shift_add": {
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ],
+      "proof_groups": {
+        "d4000ps": {
+          "labels": [
+            "d16000ps",
+            "d4000ps",
+            "d8000ps"
+          ],
+          "sha256": "2ee8653ad619e4827a4713ded60c7859f8358f4bc24f0d4c18c3d05402d32a01"
+        },
+        "unconstrained": {
+          "labels": [
+            "d1000ps",
+            "d2000ps",
+            "unconstrained"
+          ],
+          "sha256": "08916897d51b2d6c20f66d868cc065d724311b4478ce64df276b40c9ed9f501f"
+        }
+      },
+      "runs": {
+        "d1000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "08916897d51b2d6c20f66d868cc065d724311b4478ce64df276b40c9ed9f501f"
+        },
+        "d16000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "2ee8653ad619e4827a4713ded60c7859f8358f4bc24f0d4c18c3d05402d32a01"
+        },
+        "d2000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "08916897d51b2d6c20f66d868cc065d724311b4478ce64df276b40c9ed9f501f"
+        },
+        "d4000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "2ee8653ad619e4827a4713ded60c7859f8358f4bc24f0d4c18c3d05402d32a01"
+        },
+        "d8000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "2ee8653ad619e4827a4713ded60c7859f8358f4bc24f0d4c18c3d05402d32a01"
+        },
+        "unconstrained": {
+          "proof_representative": "unconstrained",
+          "sha256": "08916897d51b2d6c20f66d868cc065d724311b4478ce64df276b40c9ed9f501f"
+        }
+      }
+    },
+    "shared_dag": {
+      "pareto_labels": [
+        "unconstrained",
+        "d4000ps"
+      ],
+      "proof_groups": {
+        "d4000ps": {
+          "labels": [
+            "d16000ps",
+            "d4000ps",
+            "d8000ps"
+          ],
+          "sha256": "807e86b79b1f44b19bcc567224d47fb9fc65b3c331ce938f5f04dfa5be0c9099"
+        },
+        "unconstrained": {
+          "labels": [
+            "d1000ps",
+            "d2000ps",
+            "unconstrained"
+          ],
+          "sha256": "7b5019bd2a77ad6a17d2e791ba4a2793be6bbdb76982eb0a67a7320164390ea9"
+        }
+      },
+      "runs": {
+        "d1000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "7b5019bd2a77ad6a17d2e791ba4a2793be6bbdb76982eb0a67a7320164390ea9"
+        },
+        "d16000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "807e86b79b1f44b19bcc567224d47fb9fc65b3c331ce938f5f04dfa5be0c9099"
+        },
+        "d2000ps": {
+          "proof_representative": "unconstrained",
+          "sha256": "7b5019bd2a77ad6a17d2e791ba4a2793be6bbdb76982eb0a67a7320164390ea9"
+        },
+        "d4000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "807e86b79b1f44b19bcc567224d47fb9fc65b3c331ce938f5f04dfa5be0c9099"
+        },
+        "d8000ps": {
+          "proof_representative": "d4000ps",
+          "sha256": "807e86b79b1f44b19bcc567224d47fb9fc65b3c331ce938f5f04dfa5be0c9099"
+        },
+        "unconstrained": {
+          "proof_representative": "unconstrained",
+          "sha256": "7b5019bd2a77ad6a17d2e791ba4a2793be6bbdb76982eb0a67a7320164390ea9"
+        }
+      }
+    }
+  },
+  "negative_control": {
+    "backend": "shared_dag",
+    "counterexample_required": true,
+    "fault": "xor output bit 0 with input bit 0"
+  },
+  "reference_id": "ihp-sg13g2-abc-area-delay-formal-tiny-v1",
+  "schema": "hephaestus.abc-area-delay-formal-reference.v1",
+  "source_evidence": {
+    "merged_commit": "2bc38c07535b534ea9af1dec728129dd1017f16a",
+    "qualifying_workflow_artifact_sha256": "56d23961dd6d3999213a5338d8fe206f35b1bffe357bbd8485d40e5a83de3853"
+  },
+  "technology": {
+    "driving_cell": "sg13g2_buf_4",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396",
+    "output_load_femtofarads": 10.0,
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c"
+  }
+}

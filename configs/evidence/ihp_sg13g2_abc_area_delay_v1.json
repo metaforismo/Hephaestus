@@ -1,0 +1,27 @@
+{
+  "schema": "hephaestus.abc-area-delay-config.v1",
+  "evidence_id": "ihp-sg13g2-abc-area-delay-tiny-v1",
+  "technology": {
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c",
+    "liberty_name": "sg13g2_stdcell_typ_1p20V_25C",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396"
+  },
+  "io": {
+    "driving_cell": "sg13g2_buf_4",
+    "output_load_femtofarads": 10.0
+  },
+  "targets_picoseconds": [
+    null,
+    1000,
+    2000,
+    4000,
+    8000,
+    16000
+  ],
+  "flow": {
+    "mapper": "yosys-0.33-abc-liberty-with-constraints",
+    "timing_model": "abc-stime-pre-layout-liberty-estimate",
+    "physical_design": false,
+    "signoff_sta": false
+  }
+}

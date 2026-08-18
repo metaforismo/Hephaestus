@@ -1,0 +1,246 @@
+name: IHP ABC area-delay evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/ihp-abc-area-delay-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  abc-area-delay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          mkdir -p build/ihp-abc-area-delay/tooling
+          yosys -V | tee build/ihp-abc-area-delay/tooling/yosys.version.txt
+          dpkg-query -W -f='${Package}\t${Version}\n' yosys yosys-abc iverilog \
+            | sort \
+            | tee build/ihp-abc-area-delay/tooling/packages.tsv
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint ABC area-delay evidence implementation
+        run: |
+          ruff check src/hephaestus/abc_timing.py tests/test_abc_timing.py
+          ruff format --check src/hephaestus/abc_timing.py tests/test_abc_timing.py
+      - name: Run ABC area-delay unit tests
+        run: pytest tests/test_abc_timing.py
+      - name: Resolve the pinned technology metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/ihp-abc-area-delay/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+      - name: Fetch and verify the exact IHP Liberty file
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/ihp-abc-area-delay/input/url.txt)" \
+            --output build/ihp-abc-area-delay/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/ihp-abc-area-delay/input/sha256.txt)" \
+            build/ihp-abc-area-delay/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build and simulate matched RTL backends
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/ihp-abc-area-delay/source \
+            --module hephaestus_abc_area_delay_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/ihp-abc-area-delay/source \
+            --out build/ihp-abc-area-delay/matched \
+            --module hephaestus_abc_area_delay \
+            --verify-vectors 256 \
+            --seed 43 \
+            --simulate
+      - name: Run repeatable IHP ABC area-delay sweep
+        run: |
+          python -m hephaestus.abc_timing build/ihp-abc-area-delay/matched \
+            --technology configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/ihp-abc-area-delay/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/ihp-abc-area-delay/evidence \
+            --verify-repeatability \
+            --timeout 300
+      - name: Validate the exact regression reference and claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          evidence = json.loads(
+              Path(
+                  'build/ihp-abc-area-delay/evidence/'
+                  'abc_area_delay_evidence.json'
+              ).read_text(encoding='utf-8')
+          )
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/'
+                  'ihp_sg13g2_abc_area_delay_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+
+          assert evidence['schema'] == 'hephaestus.abc-area-delay-evidence.v1'
+          assert evidence['evidence_level'] == 'abc_liberty_area_delay_estimate'
+          assert reference['schema'] == 'hephaestus.abc-area-delay-reference.v1'
+          assert evidence['technology']['technology_id'] == (
+              reference['technology']['technology_id']
+          )
+          assert evidence['technology']['library']['sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          assert evidence['configuration']['io'] == {
+              'driving_cell': reference['technology']['driving_cell'],
+              'output_load_femtofarads': (
+                  reference['technology']['output_load_femtofarads']
+              ),
+          }
+          assert evidence['contract']['input_count'] * evidence['contract'][
+              'input_width'
+          ] == reference['case']['input_bits']
+          assert evidence['contract']['output_count'] * evidence['contract'][
+              'accumulator_width'
+          ] == reference['case']['output_bits']
+          assert set(evidence['backends']) == set(reference['expected'])
+
+          for backend_name, expected_backend in reference['expected'].items():
+              actual_backend = evidence['backends'][backend_name]
+              expected_pareto = expected_backend['pareto_labels']
+              assert actual_backend['pareto_labels'] == expected_pareto
+              expected_runs = {
+                  label: run
+                  for label, run in expected_backend.items()
+                  if label != 'pareto_labels'
+              }
+              assert set(actual_backend['runs']) == set(expected_runs)
+              for label, expected in expected_runs.items():
+                  actual = actual_backend['runs'][label]
+                  assert actual['metrics']['cell_count'] == expected['cell_count']
+                  assert math.isclose(
+                      actual['library_area'],
+                      expected['library_area'],
+                      rel_tol=0,
+                      abs_tol=1e-9,
+                  )
+                  assert math.isclose(
+                      actual['critical_path_delay_picoseconds'],
+                      expected['delay_picoseconds'],
+                      rel_tol=0,
+                      abs_tol=1e-9,
+                  )
+                  assert actual['target_met'] is expected['target_met']
+                  assert actual['abc_stime']['delay_unit'] == 'ps'
+                  assert actual['abc_stime']['capacitance_unit'] == 'ff'
+                  assert actual['abc_stime']['gate_count'] == (
+                      actual['metrics']['cell_count']
+                  )
+                  assert actual['area_cross_check_passed']
+                  assert actual['repeatability']['passed']
+                  assert all(
+                      actual['repeatability'][
+                          'byte_identical_artifacts'
+                      ].values()
+                  )
+
+          for label, expected_peers in reference[
+              'comparisons_to_shared_dag'
+          ].items():
+              actual_peers = evidence['comparisons_to_shared_dag'][label]
+              for peer_name, expected in expected_peers.items():
+                  actual = actual_peers[peer_name]
+                  assert math.isclose(
+                      actual['shared_dag_area_reduction_percent'],
+                      expected['area_reduction_percent'],
+                      rel_tol=0,
+                      abs_tol=1e-12,
+                  )
+                  assert math.isclose(
+                      actual['shared_dag_delay_reduction_percent'],
+                      expected['delay_reduction_percent'],
+                      rel_tol=0,
+                      abs_tol=1e-12,
+                  )
+                  assert math.isclose(
+                      actual[
+                          'shared_dag_area_delay_product_reduction_percent'
+                      ],
+                      expected['area_delay_product_reduction_percent'],
+                      rel_tol=0,
+                      abs_tol=1e-12,
+                  )
+
+          for label, shared in evidence['backends']['shared_dag']['runs'].items():
+              for peer_name in ('naive_shift_add', 'constant_multipliers'):
+                  peer = evidence['backends'][peer_name]['runs'][label]
+                  assert shared['library_area'] < peer['library_area']
+                  assert shared['critical_path_delay_picoseconds'] < (
+                      peer['critical_path_delay_picoseconds']
+                  )
+
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'technology_aware_abc_mapping_performed': True,
+              'declared_input_driver_model_used': True,
+              'declared_output_load_used': True,
+              'abc_internal_timing_estimated': True,
+              'abc_delay_targets_swept': True,
+              'target_attainment_evaluated': True,
+              'mapped_netlist_structurally_checked': True,
+              'post_mapping_library_area_estimated': True,
+              'area_delay_product_computed': True,
+              'mapped_gate_level_equivalence_verified': False,
+              'signoff_sta_performed': False,
+              'sdc_timing_analyzed': False,
+              'timing_closed': False,
+              'power_estimated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          root = Path('build/ihp-abc-area-delay/evidence')
+          assert (root / 'SUMMARY.md').is_file()
+          assert (root / 'source_matched_manifest.json').is_file()
+          assert (root / 'constraints' / 'abc.constr').is_file()
+          assert (root / 'technology' / 'technology.lib').is_file()
+          PY
+      - name: Upload ABC area-delay evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-abc-area-delay-evidence
+          path: build/ihp-abc-area-delay
+          if-no-files-found: error
+          retention-days: 30
