@@ -53,6 +53,30 @@ jobs:
               raise SystemExit(
                   f'expected three one-shot run blocks, found {len(blocks)}'
               )
+
+          commands = blocks[1].splitlines()
+
+          def command_range(prefix: str) -> tuple[int, int]:
+              start = next(
+                  index
+                  for index, line in enumerate(commands)
+                  if line.startswith(prefix)
+              )
+              end = start + 1
+              while commands[end - 1].rstrip().endswith('\\'):
+                  end += 1
+              return start, end
+
+          check_start, check_end = command_range('ruff check --fix')
+          format_start, format_end = command_range('ruff format')
+          if check_end != format_start:
+              raise SystemExit('unexpected Ruff command layout in one-shot payload')
+          commands[check_start:format_end] = (
+              commands[format_start:format_end] +
+              commands[check_start:check_end]
+          )
+          blocks[1] = '\n'.join(commands)
+
           Path('/tmp/opensta-refactor-one-shot.sh').write_text(
               '#!/usr/bin/env bash\nset -euo pipefail\n' +
               '\n\n'.join(blocks) + '\n',
