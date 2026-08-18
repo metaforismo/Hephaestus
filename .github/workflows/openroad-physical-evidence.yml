@@ -1,0 +1,316 @@
+name: Pinned IHP OpenROAD physical evidence
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install pinned RTL and proof tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+
+      - name: Install, lint, and test Hephaestus
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+          python -m hephaestus.openroad_physical --help
+
+      - name: Rebuild the exact registered source evidence
+        run: |
+          set -euo pipefail
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/openroad-physical/source \
+            --module hephaestus_registered_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/openroad-physical/source \
+            --out build/openroad-physical/matched \
+            --module hephaestus_registered \
+            --verify-vectors 256 \
+            --seed 59 \
+            --simulate
+          python -m hephaestus.formal build/openroad-physical/matched \
+            --codes build/openroad-physical/source/codes.npy \
+            --out build/openroad-physical/formal \
+            --max-input-bits 64 \
+            --timeout 300
+          python -m hephaestus.registered build/openroad-physical/matched \
+            --codes build/openroad-physical/source/codes.npy \
+            --formal-evidence build/openroad-physical/formal/formal_evidence.json \
+            --out build/openroad-physical/registered \
+            --module hephaestus_registered_tile \
+            --verify-vectors 256 \
+            --seed 59 \
+            --simulate
+
+      - name: Prepare all three matched physical designs
+        run: |
+          python -m hephaestus.openroad_physical prepare \
+            build/openroad-physical/registered \
+            --registered-reference \
+              benchmarks/reference/registered_matched_tiles_tiny_v1.json \
+            --probe-reference \
+              benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            --contract \
+              configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            --out build/openroad-physical/prepared
+
+      - name: Validate the prepared claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('build/openroad-physical/prepared/prepared.json')
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.openroad-physical-prepared.v1'
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert evidence['contract']['value']['attempts_per_backend'] == 2
+          assert evidence['toolchain']['orfs_image_repo_digest'].startswith(
+              'openroad/orfs@sha256:'
+          )
+          assert evidence['claims'] == {
+              'registered_source_binding_verified': True,
+              'all_three_backends_prepared': True,
+              'common_physical_contract_emitted': True,
+              'orfs_image_digest_pinned': True,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_physical_equivalence_verified': False,
+              'comparative_ppa_claim_enabled': False,
+              'drc_clean': False,
+              'lvs_clean': False,
+              'power_estimated_with_activity': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          PY
+
+      - name: Upload prepared sources and contracts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openroad-physical-prepared
+          path: build/openroad-physical/prepared
+          if-no-files-found: error
+          retention-days: 30
+
+  physical-run:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - shared_dag
+          - naive_shift_add
+          - constant_multipliers
+        attempt:
+          - 1
+          - 2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Hephaestus
+        run: python -m pip install -e .
+
+      - name: Download the exact prepared source bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: openroad-physical-prepared
+          path: build/openroad-physical/prepared
+
+      - name: Run one pinned ORFS attempt
+        run: |
+          python -m hephaestus.openroad_physical run \
+            build/openroad-physical/prepared/prepared.json \
+            --backend '${{ matrix.backend }}' \
+            --attempt '${{ matrix.attempt }}' \
+            --out \
+              'build/openroad-physical/runs/${{ matrix.backend }}/attempt-${{ matrix.attempt }}' \
+            --timeout 7200
+
+      - name: Upload the complete physical attempt
+        uses: actions/upload-artifact@v4
+        with:
+          name: openroad-physical-run-${{ matrix.backend }}-${{ matrix.attempt }}
+          path: build/openroad-physical/runs/${{ matrix.backend }}/attempt-${{ matrix.attempt }}
+          if-no-files-found: error
+          retention-days: 30
+
+  bind:
+    needs:
+      - prepare
+      - physical-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Hephaestus
+        run: python -m pip install -e .
+
+      - name: Download the prepared source bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: openroad-physical-prepared
+          path: build/openroad-physical/prepared
+
+      - name: Download all six physical attempts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openroad-physical-run-*
+          path: build/openroad-physical/downloaded-runs
+
+      - name: Bind all attempts and verify repeatability
+        run: |
+          python -m hephaestus.openroad_physical bind \
+            build/openroad-physical/prepared/prepared.json \
+            --runs build/openroad-physical/downloaded-runs \
+            --out build/openroad-physical/evidence
+
+      - name: Require the binder to reject a real manifest mutation
+        run: |
+          set -euo pipefail
+          target=$(find build/openroad-physical/downloaded-runs \
+            -name openroad_run.json -print | sort | head -n 1)
+          cp "$target" "$target.original"
+          python - "$target" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding='utf-8'))
+          value['source']['wrapper_sha256'] = '0' * 64
+          path.write_text(
+              json.dumps(value, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          set +e
+          python -m hephaestus.openroad_physical bind \
+            build/openroad-physical/prepared/prepared.json \
+            --runs build/openroad-physical/downloaded-runs \
+            --out build/openroad-physical/negative-control \
+            > build/openroad-physical/negative-control.stdout.txt \
+            2> build/openroad-physical/negative-control.stderr.txt
+          returncode=$?
+          set -e
+          mv "$target.original" "$target"
+          if [ "$returncode" -eq 0 ]; then
+            echo 'The physical binder accepted the mutated source digest.'
+            exit 1
+          fi
+          grep -q 'source binding differs' \
+            build/openroad-physical/negative-control.stderr.txt
+
+      - name: Validate the final claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(
+              'build/openroad-physical/evidence/openroad_physical_evidence.json'
+          )
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.openroad-physical-evidence.v1'
+          assert evidence['evidence_level'] == (
+              'matched_registered_orfs_rtl_to_gds_repeatability'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['repeatability']['passed']
+              and len(backend['runs']) == 2
+              for backend in evidence['backends'].values()
+          )
+          assert evidence['claims'] == {
+              'registered_source_binding_verified': True,
+              'pinned_orfs_image_used': True,
+              'all_three_backends_placed': True,
+              'all_three_backends_routed': True,
+              'all_three_backends_emitted_gds': True,
+              'all_three_backends_emitted_spef': True,
+              'two_attempts_per_backend_completed': True,
+              'physical_repeatability_verified': True,
+              'physical_metrics_recorded': True,
+              'common_physical_boundary_verified': True,
+              'post_physical_equivalence_verified': False,
+              'comparative_ppa_claim_enabled': False,
+              'drc_clean': False,
+              'lvs_clean': False,
+              'power_estimated_with_activity': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          PY
+
+      - name: Upload the bound matched physical evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-openroad-physical-evidence
+          path: |
+            build/openroad-physical/evidence
+            build/openroad-physical/prepared
+            build/openroad-physical/downloaded-runs/**/openroad_run.json
+            build/openroad-physical/downloaded-runs/**/6_final.gds
+            build/openroad-physical/downloaded-runs/**/6_final.def
+            build/openroad-physical/downloaded-runs/**/6_final.v
+            build/openroad-physical/downloaded-runs/**/6_final.odb
+            build/openroad-physical/downloaded-runs/**/6_final.spef
+            build/openroad-physical/downloaded-runs/**/metadata.json
+            build/openroad-physical/downloaded-runs/**/tool-versions.txt
+            build/openroad-physical/negative-control.*.txt
+          if-no-files-found: error
+          retention-days: 30
