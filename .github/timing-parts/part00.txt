@@ -1,0 +1,187 @@
+"""Pinned OpenSTA timing evidence for formally proved ABC-mapped netlists."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+from .report import sha256_file, write_json
+
+
+class TimingEvidenceError(RuntimeError):
+    """Raised when OpenSTA evidence cannot be produced safely."""
+
+
+_BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_LABEL_RE = re.compile(r"[A-Za-z0-9_.-]+")
+_REQUIRED_AREA_CLAIMS = (
+    "matched_integer_contract_verified",
+    "technology_aware_abc_mapping_performed",
+    "declared_input_driver_model_used",
+    "declared_output_load_used",
+    "abc_internal_timing_estimated",
+    "abc_delay_targets_swept",
+    "target_attainment_evaluated",
+    "mapped_netlist_structurally_checked",
+    "post_mapping_library_area_estimated",
+    "area_delay_product_computed",
+)
+_REQUIRED_FORMAL_CLAIMS = (
+    "abc_area_delay_source_evidence_verified",
+    "all_abc_sweep_mapped_netlists_equivalent",
+    "all_pareto_mapped_netlists_equivalent",
+    "mapped_gate_level_equivalence_verified",
+    "exhaustive_combinational_equivalence_verified",
+    "negative_control_counterexample_found",
+)
+
+
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TimingEvidenceError(f"cannot read JSON artifact {path}: {exc}") from exc
+
+
+def _required_string(mapping: dict[str, Any], key: str, context: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise TimingEvidenceError(f"{context}.{key} must be a non-empty string")
+    return value.strip()
+
+
+def _required_number(mapping: dict[str, Any], key: str, context: str) -> float:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TimingEvidenceError(f"{context}.{key} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise TimingEvidenceError(f"{context}.{key} must be finite")
+    return result
+
+
+def _safe_module(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _MODULE_RE.fullmatch(value) is None:
+        raise TimingEvidenceError(f"{context} is not a safe Verilog module name: {value!r}")
+    return value
+
+
+def _safe_label(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _LABEL_RE.fullmatch(value) is None:
+        raise TimingEvidenceError(f"{context} is not a safe label: {value!r}")
+    return value
+
+
+def _safe_relative(root: Path, raw_path: str) -> Path:
+    relative = Path(raw_path)
+    if relative.is_absolute():
+        raise TimingEvidenceError(f"artifact path must be relative: {raw_path!r}")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise TimingEvidenceError(f"artifact escapes its bundle root: {raw_path!r}") from exc
+    if not resolved.is_file():
+        raise TimingEvidenceError(f"artifact does not exist: {resolved}")
+    return resolved
+
+
+def _resolve_hashed_artifact(root: Path, entry: Any, *, context: str) -> Path:
+    if not isinstance(entry, dict):
+        raise TimingEvidenceError(f"{context} must be an artifact object")
+    raw_path = entry.get("path")
+    expected = entry.get("sha256")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise TimingEvidenceError(f"{context}.path must be a non-empty string")
+    if not isinstance(expected, str) or _SHA256_RE.fullmatch(expected) is None:
+        raise TimingEvidenceError(f"{context}.sha256 must be a lowercase SHA-256 digest")
+    resolved = _safe_relative(root, raw_path)
+    actual = sha256_file(resolved)
+    if actual != expected:
+        raise TimingEvidenceError(
+            f"{context} digest mismatch: expected {expected}, got {actual}"
+        )
+    return resolved
+
+
+def _resolve_executable(requested: str) -> Path:
+    resolved = shutil.which(requested)
+    if resolved is None:
+        candidate = Path(requested)
+        if candidate.is_file():
+            resolved = str(candidate.resolve())
+    if resolved is None:
+        raise TimingEvidenceError(f"OpenSTA executable was not found: {requested!r}")
+    path = Path(resolved).resolve()
+    if not path.is_file() or not path.stat().st_mode & 0o111:
+        raise TimingEvidenceError(f"OpenSTA executable is not an executable file: {path}")
+    return path
+
+
+def _tcl_number(value: float) -> str:
+    if not math.isfinite(value):
+        raise ValueError("Tcl numeric values must be finite")
+    return format(value, ".12g")
+
+
+def _load_contract(path: Path) -> dict[str, Any]:
+    raw = _load_json(path)
+    if not isinstance(raw, dict):
+        raise TimingEvidenceError("timing contract must be a JSON object")
+    if raw.get("schema") != "hephaestus.opensta-timing-contract.v1":
+        raise TimingEvidenceError("unsupported OpenSTA timing-contract schema")
+    for key in ("contract_id", "technology_id", "virtual_clock_name", "driving_cell"):
+        _required_string(raw, key, "timing_contract")
+    if _LABEL_RE.fullmatch(str(raw["contract_id"])) is None:
+        raise TimingEvidenceError("timing_contract.contract_id contains unsafe characters")
+    if _LABEL_RE.fullmatch(str(raw["technology_id"])) is None:
+        raise TimingEvidenceError'timing_contract.technology_id contains unsafe characters')
+    if _MODULE_RE.fullmatch(str(raw["virtual_clock_name"])) is None:
+        raise TimingEvidenceError("timing_contract.virtual_clock_name is unsafe")
+    if re.fullmatch(r"[A-Za-z0-9_]+", str(raw["driving_cell"])) is None:
+        raise TimingEvidenceError("timing_contract.driving_cell is unsafe")
+
+    for key in ("virtual_clock_period_ns", "output_load_pf"):
+        if _required_number(raw, key, "timing_contract") <= 0:
+            raise TimingEvidenceError(f"timing_contract.{key} must be positive")
+    for key in ("input_delay_ns", "output_delay_ns"):
+        if _required_number(raw, key, "timing_contract") < 0:
+            raise TimingEvidenceError(f"timing_contract.{key} must be non-negative")
+    for key in ("group_path_count", "endpoint_path_count", "digits", "attempts"):
+        value = raw.get(key)
+        if type(value) is not int or value <= 0:
+            raise TimingEvidenceError(f"timing_contract.{key} must be a positive integer")
+    if raw["digits"] > 12:
+        raise TimingEvidenceError("timing_contract.digits must be at most 12")
+    if raw["attempts"] < 2:
+        raise TimingEvidenceError("timing_contract.attempts must be at least two")
+    if raw.get("path_delay") != "max":
+        raise TimingEvidenceError("this evidence level supports only maximum-delay paths")
+    if raw.get("selection_policy" != "all_unique_formally_proved_mapped_verilog_digests")
+        raise TimingEvidenceError("unsupported timing-contract selection_policy")
+    if raw.get("parasitics") is not None:
+        raise TimingEvidenceError("this pre-layout evidence level requires parasitics to be null")
+    _required_string(raw, "wire_model", "timing_contract")
+
+    opensta = raw.get("opensta")
+    if not isinstance(opensta, dict):
+        raise TimingEvidenceError("timing_contract.opensta must be a JSON object")
+    if _required_string(opensta, "repository", "timing_contract.opensta") != (
+        "parallaxsw/OpenSTA"
+    ):
+        raise TimingEvidenceError("timing contract targets an unsupported OpenSTA repository")
+    commit = _required_string(opensta, "commit", "timing_contract.opensta")
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise TimingEvidenceError("timing_contract.opensta.commit must be a full Git SHA")
+    return raw

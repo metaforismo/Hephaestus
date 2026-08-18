@@ -1,0 +1,38 @@
+name: One-shot assemble OpenSTA timing module
+
+on:
+  push:
+    branches:
+      - feat/opensta-timing-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/opensta-timing-evidence
+      - name: Assemble and verify the module
+        run: |
+          set -euo pipefail
+          cat .github/timing-parts/part*.txt > src/hephaestus/timing.py
+          python -m py_compile src/hephaestus/timing.py
+          test "$(wc -c < src/hephaestus/timing.py)" = "41702"
+          test "$(sha256sum src/hephaestus/timing.py | cut -d' ' -f1)" = \
+            "$(cat .github/timing-parts/sha256.txt)"
+          rm -rf .github/timing-parts
+          rm .github/workflows/one-shot-assemble-timing.yml
+      - name: Commit the assembled implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hephaestus/timing.py \
+            .github/timing-parts \
+            .github/workflows/one-shot-assemble-timing.yml
+          git commit -m 'Install the fail-closed OpenSTA timing builder'
+          git push origin HEAD:feat/opensta-timing-evidence

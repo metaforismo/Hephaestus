@@ -1,0 +1,139 @@
+nfiguration")
+    return liberty, config, str(technology_id)
+
+
+def _proof_passed(proof: Any, *, context: str) -> None:
+    if not isinstance(proof, dict):
+        raise TimingEvidenceError(f"{context} is malformed")
+    result = proof.get("proof")
+    if not isinstance(result, dict):
+        raise TimingEvidenceError(f"{context}.proof is malformed")
+    if result.get("performed") is not True or result.get("passed") is not True:
+        raise TimingEvidenceError(f"{context} did not pass")
+    if result.get("proof_success") is not True or result.get("counterexample_found") is not False:
+        raise TimingEvidenceError(
+            f"{context} is not a successful positive equivalence proof"
+        )
+
+
+def _collect_analyses(
+    area_root: Path,
+    area: dict[str, Any],
+    formal: dict[str, Any],
+) -> list[dict[str, Any]]:
+    area_backends = area.get("backends")
+    formal_backends = formal.get("backends")
+    if not isinstance(area_backends, dict) or not isinstance(formal_backends, dict):
+        raise TimingEvidenceError("ABC backend evidence is malformed")
+    if set(area_backends) != set(_BACKENDS) or set(formal_backends) != set(_BACKENDS):
+        raise TimingEvidenceError("timing evidence requires the three matched backends")
+
+    analyses: list[dict[str, Any]] = []
+    unique_digests: set[str] = set()
+    total_runs = 0
+    for backend_name in _BACKENDS:
+        area_backend = area_backends[backend_name]
+        formal_backend = formal_backends[backend_name]
+        if not isinstance(area_backend, dict) or not isinstance(formal_backend, dict):
+            raise TimingEvidenceError(f"backend {backend_name!r} is malformed")
+        module = _safe_module(area_backend.get("module"), context=f"{backend_name}.module")
+        if formal_backend.get("module") != module:
+            raise TimingEvidenceError(f"backend {backend_name!r} module differs across evidence")
+        area_runs = area_backend.get("runs")
+        formal_runs = formal_backend.get("runs")
+        proofs = formal_backend.get("proofs")
+        if not all(isinstance(value, dict) for value in (area_runs, formal_runs, proofs)):
+            raise TimingEvidenceError(f"backend {backend_name!r} run evidence is malformed")
+        assert isinstance(area_runs, dict)
+        assert isinstance(formal_runs, dict)
+        assert isinstance(proofs, dict)
+        if set(area_runs) != set(formal_runs):
+            raise TimingEvidenceError(f"backend {backend_name!r} sweep labels differ")
+        total_runs += len(area_runs)
+
+        by_representative: dict[str, list[str]] = defaultdict(list)
+        for label, area_run in area_runs.items():
+            safe_label = _safe_label(label, context=f"{backend_name}.runs")
+            formal_run = formal_runs.get(safe_label)
+            if not isinstance(area_run, dict) or not isinstance(formal_run, dict):
+                raise TimingEvidenceError(f"run {backend_name}/{safe_label} is malformed")
+            repeatability = area_run.get("repeatability")
+            if (
+                not isinstance(repeatability, dict)
+                or repeatability.get("performed") is not True
+                or repeatability.get("passed") is not True
+                or repeatability.get("normalized_metrics_identical") is not True
+            ):
+                raise TimingEvidenceError(f"run {backend_name}/{safe_label} is not repeatable")
+            artifact = area_run.get("artifacts")
+            if not isinstance(artifact, dict):
+                raise TimingEvidenceError(f"run {backend_name}/{safe_label} has no artifacts")
+            mapped = _resolve_hashed_artifact(
+                area_root,
+                artifact.get("mapped_verilog"),
+                context=f"backends.{backend_name}.runs.{safe_label}.mapped_verilog",
+            )
+            digest = sha256_file(mapped)
+            if formal_run.get("mapped_verilog_sha256") != digest:
+                raise TimingEvidenceError(
+                    f"formal run {backend_name}/{safe_label} binds a different netlist"
+                )
+            if formal_run.get("equivalence_verified") is not True:
+                raise TimingEvidenceError(f"run {backend_name}/{safe_label} is not equivalent")
+            representative = _safe_label(
+                formal_run.get("proof_representative"),
+                context=f"{backend_name}/{safe_label}.proof_representative",
+            )
+            by_representative[representative].append(safe_label)
+
+        for representative, aliases in sorted(by_representative.items()):
+            if representative not in area_runs:
+                raise TimingEvidenceError(
+                    f"proof representative {backend_name}/{representative} is absent"
+                )
+            area_run = area_runs[representative]
+            formal_run = formal_runs[representative]
+            proof = proofs.get(representative)
+            _proof_passed(proof, context=f"{backend_name}.proofs.{representative}")
+            assert isinstance(area_run, dict)
+            assert isinstance(formal_run, dict)
+            assert isinstance(proof, dict)
+            artifacts = area_run.get("artifacts")
+            if not isinstance(artifacts, dict):
+                raise TimingEvidenceError(
+                    f"representative {backend_name}/{representative} has no artifacts"
+                )
+            mapped = _resolve_hashed_artifact(
+                area_root,
+                artifacts.get("mapped_verilog"),
+                context=(
+                    f"backends.{backend_name}.runs.{representative}.artifacts.mapped_verilog"
+                ),
+            )
+            digest = sha256_file(mapped)
+            if proof.get("mapped_verilog_sha256") != digest:
+                raise TimingEvidenceError(
+                    f"proof {backend_name}/{representative} binds a different netlist"
+                )
+            covered = proof.get("covered_labels")
+            if not isinstance(covered, list) or sorted(covered) != sorted(aliases):
+                raise TimingEvidenceError(
+                    f"proof {backend_name}/{representative} covers different labels"
+                )
+            if digest in unique_digests:
+                raise TimingEvidenceError(
+                    f"distinct timing analyses unexpectedly share mapped digest {digest}"
+                )
+            unique_digests.add(digest)
+            analyses.append(
+                {
+                    "backend": backend_name,
+                    "representative_label": representative,
+                    "covered_labels": sorted(aliases),
+                    "pareto_point": representative in area_backend.get("pareto_labels", []),
+                    "module": module,
+                    "mapped_verilog": mapped,
+                    "mapped_verilog_sha256": digest,
+                    "mapped_cell_count": formal_run.get("mapped_cell_count"),
+                    "abc_library_area": area_run.get("library_area"),
+                    "abc_delay_picoseconds":

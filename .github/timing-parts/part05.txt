@@ -1,0 +1,164 @@
+ot / "abc_area_delay_formal_evidence.json"
+    if not area_path.is_file() or not formal_path.is_file():
+        raise TimingEvidenceError("ABC area-delay and formal manifests are required")
+
+    contract = _load_contract(timing_contract.resolve())
+    executable = _resolve_executable(sta)
+    tool = _load_tool_metadata(tool_metadata.resolve(), executable, contract)
+    area, formal = _validate_sources(area_path, formal_path)
+    liberty, technology_config, technology_id = _technology_inputs(
+        area_root,
+        area,
+        formal,
+        contract,
+    )
+    analyses = _collect_analyses(area_root, area, formal)
+
+    technology_dir = output / "technology"
+    tooling_dir = output / "tooling"
+    technology_dir.mkdir(parents=True, exist_ok=True)
+    tooling_dir.mkdir(parents=True, exist_ok=True)
+    preserved_liberty = technology_dir / "technology.lib"
+    preserved_technology = technology_dir / "technology.json"
+    preserved_contract = output / "timing_contract.json"
+    preserved_area = output / "source_abc_area_delay_evidence.json"
+    preserved_formal = output / "source_abc_area_delay_formal_evidence.json"
+    preserved_tool = tooling_dir / "tool.json"
+    preserved_binary = tooling_dir / "opensta.bin"
+    shutil.copyfile(liberty, preserved_liberty)
+    shutil.copyfile(technology_config, preserved_technology)
+    shutil.copyfile(timing_contract.resolve(), preserved_contract)
+    shutil.copyfile(area_path, preserved_area)
+    shutil.copyfile(formal_path, preserved_formal)
+    shutil.copyfile(tool_metadata.resolve(), preserved_tool)
+    shutil.copy2(executable, preserved_binary)
+    preserved_binary.chmod(preserved_binary.stat().st_mode | 0o111)
+    if sha256_file(preserved_binary) != tool["binary_sha256"]:
+        raise TimingEvidenceError("preserved OpenSTA binary digest changed during copying")
+
+    results = [
+        _run_analysis(
+            analysis=analysis,
+            contract=contract,
+            output=output,
+            executable=preserved_binary,
+            timeout_seconds=timeout_seconds,
+        )
+        for analysis in analyses
+    ]
+    manifest = {
+        "schema": "hephaestus.opensta-abc-sweep-timing-evidence.v1",
+        "evidence_level": "opensta_sdc_pre_layout_timing_estimate",
+        "source": {
+            "abc_area_delay_evidence": preserved_area.name,
+            "abc_area_delay_evidence_sha256": sha256_file(preserved_area),
+            "abc_area_delay_formal_evidence": preserved_formal.name,
+            "abc_area_delay_formal_evidence_sha256": sha256_file(preserved_formal),
+        },
+        "technology": {
+            "technology_id": technology_id,
+            "configuration": {
+                "path": preserved_technology.relative_to(output).as_posix(),
+                "sha256": sha256_file(preserved_technology),
+            },
+            "liberty": {
+                "path": preserved_liberty.relative_to(output).as_posix(),
+                "sha256": sha256_file(preserved_liberty),
+            },
+        },
+        "tool": {
+            **tool,
+            "metadata_artifact": {
+                "path": preserved_tool.relative_to(output).as_posix(),
+                "sha256": sha256_file(preserved_tool),
+            },
+            "binary_artifact": {
+                "path": preserved_binary.relative_to(output).as_posix(),
+                "sha256": sha256_file(preserved_binary),
+            },
+        },
+        "timing_contract": contract,
+        "scope": {
+            "source_sweep_runs": formal["scope"]["source_sweep_runs"],
+            "unique_formally_proved_netlists_timed": len(results),
+            "timing_reuse_rule": "only byte-identical mapped-Verilog SHA-256 digests",
+            "combinational": True,
+            "sequential_depth": 0,
+            "parasitics_annotated": False,
+        },
+        "results": results,
+        "comparisons_to_shared_dag": _comparisons(results),
+        "claims": {
+            "abc_area_delay_source_evidence_verified": True,
+            "abc_area_delay_formal_source_evidence_verified": True,
+            "all_timed_netlists_formally_equivalent": True,
+            "all_unique_formally_proved_netlists_timed": True,
+            "opensta_binary_built_from_pinned_source": True,
+            "opensta_binary_provenance_captured": True,
+            "opensta_binary_reproducibility_verified": bool(
+                tool.get("binary_reproducibility_verified", False)
+            ),
+            "sdc_constraints_applied": True,
+            "setup_checks_passed": True,
+            "detailed_max_path_reported": True,
+            "unconstrained_paths_found": False,
+            "pre_layout_timing_analyzed": True,
+            "repeatability_verified": True,
+            "signoff_sta_performed": False,
+            "timing_closed": False,
+            "parasitics_annotated": False,
+            "placement_performed": False,
+            "routing_performed": False,
+            "power_estimated": False,
+            "post_layout_pex_verified": False,
+            "silicon_verified": False,
+        },
+    }
+    write_json(output / "timing_evidence.json", manifest)
+    _write_summary(output / "SUMMARY.md", manifest)
+    return manifest
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Time every distinct formally proved ABC-mapped netlist with OpenSTA."
+    )
+    parser.add_argument("area_delay_bundle", type=Path)
+    parser.add_argument("--area-delay-formal", type=Path, required=True)
+    parser.add_argument("--contract", type=Path, required=True)
+    parser.add_argument("--tool-metadata", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=Path("build/opensta-timing"))
+    parser.add_argument("--sta", default="sta")
+    parser.add_argument("--timeout", type=int, default=300)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    try:
+        manifest = build_timing_evidence(
+            arguments.area_delay_bundle,
+            arguments.area_delay_formal,
+            arguments.contract,
+            arguments.tool_metadata,
+            arguments.out,
+            sta=arguments.sta,
+            timeout_seconds=arguments.timeout,
+        )
+    except (
+        TimingEvidenceError,
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"timed {manifest['scope']['unique_formally_proved_netlists_timed']} "
+        f"formally proved netlists at evidence level {manifest['evidence_level']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

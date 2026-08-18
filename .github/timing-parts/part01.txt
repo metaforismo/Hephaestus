@@ -1,0 +1,90 @@
+y") != "all_unique_formally_proved_mapped_verilog_digests":
+        raise TimingEvidenceError("unsupported timing-contract selection_policy")
+    if raw.get("parasitics") is not None:
+        raise TimingEvidenceError("this pre-layout evidence level requires parasitics to be null")
+    _required_string(raw, "wire_model", "timing_contract")
+
+    opensta = raw.get("opensta")
+    if not isinstance(opensta, dict):
+        raise TimingEvidenceError("timing_contract.opensta must be a JSON object")
+    if _required_string(opensta, "repository", "timing_contract.opensta") != (
+        "parallaxsw/OpenSTA"
+    ):
+        raise TimingEvidenceError("timing contract targets an unsupported OpenSTA repository")
+    commit = _required_string(opensta, "commit", "timing_contract.opensta")
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise TimingEvidenceError("timing_contract.opensta.commit must be a full Git SHA")
+    return raw
+
+
+def _load_tool_metadata(path: Path, binary: Path, contract: dict[str, Any]) -> dict[str, Any]:
+    raw = _load_json(path)
+    if not isinstance(raw, dict) or raw.get("schema") != "hephaestus.opensta-tool.v1":
+        raise TimingEvidenceError("unsupported OpenSTA tool metadata schema")
+    expected = contract["opensta"]
+    if raw.get("repository") != expected["repository"]:
+        raise TimingEvidenceError("OpenSTA tool repository differs from the timing contract")
+    if raw.get("commit") != expected["commit"]:
+        raise TimingEvidenceError("OpenSTA tool commit differs from the timing contract")
+    digest = raw.get("binary_sha256")
+    if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
+        raise TimingEvidenceError("OpenSTA tool metadata has an invalid binary digest")
+    if sha256_file(binary) != digest:
+        raise TimingEvidenceError("OpenSTA binary digest differs from tool metadata")
+    banner = raw.get("banner")
+    if not isinstance(banner, str) or not banner.startswith("OpenSTA "):
+        raise TimingEvidenceError("OpenSTA tool metadata has no valid version banner")
+    cudd = raw.get("cudd")
+    if not isinstance(cudd, dict):
+        raise TimingEvidenceError("OpenSTA tool metadata has no CUDD provenance")
+    cudd_digest = cudd.get("sha256")
+    if not isinstance(cudd_digest, str) or _SHA256_RE.fullmatch(cudd_digest) is None:
+        raise TimingEvidenceError("OpenSTA CUDD provenance has an invalid digest")
+    return raw
+
+
+def _require_claims(claims: Any, required: tuple[str, ...], *, context: str) -> dict[str, Any]:
+    if not isinstance(claims, dict):
+        raise TimingEvidenceError(f"{context} claims are malformed")
+    missing = [name for name in required if claims.get(name) is not True]
+    if missing:
+        raise TimingEvidenceError(
+            f"{context} is missing required true claims: {missing}"
+        )
+    return claims
+
+
+def _validate_sources(
+    area_path: Path,
+    formal_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    area = _load_json(area_path)
+    formal = _load_json(formal_path)
+    if not isinstance(area, dict) or area.get("schema") != (
+        "hephaestus.abc-area-delay-evidence.v1"
+    ):
+        raise TimingEvidenceError("unsupported ABC area-delay evidence schema")
+    if area.get("evidence_level") != "abc_liberty_area_delay_estimate":
+        raise TimingEvidenceError("unsupported ABC area-delay evidence level")
+    area_claims = _require_claims(
+        area.get("claims"), _REQUIRED_AREA_CLAIMS, context="ABC area-delay evidence"
+    )
+    if area_claims.get("mapped_gate_level_equivalence_verified") is not False:
+        raise TimingEvidenceError("source ABC evidence must not pre-claim formal equivalence")
+
+    if not isinstance(formal, dict) or formal.get("schema") != (
+        "hephaestus.abc-area-delay-formal-evidence.v1"
+    ):
+        raise TimingEvidenceError("unsupported ABC area-delay formal evidence schema")
+    if formal.get("evidence_level") != "yosys_sat_abc_area_delay_mapped_equivalence":
+        raise TimingEvidenceError("unsupported ABC area-delay formal evidence level")
+    _require_claims(
+        formal.get("claims"), _REQUIRED_FORMAL_CLAIMS, context="ABC formal evidence"
+    )
+    source = formal.get("source")
+    if not isinstance(source, dict):
+        raise TimingEvidenceError("ABC formal source metadata is malformed")
+    if source.get("abc_area_delay_evidence_sha256") != sha256_file(area_path):
+        raise TimingEvidenceError("ABC formal evidence does not bind the exact area-delay manifest")
+
+    area_contract = area.get("contractˆ¤(€€€™½Éµ…±}Í½Á”€ô™½Éµ…°¹•Ð ‰Í½Á”ˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡…É•…}½¹ÑÉ…Ð°‘¥Ð¤½È¹½Ð¥Í¥¹ÍÑ…¹”¡™½Éµ…±}Í½Á”°‘¥Ð¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰	•Ù¥‘•¹”½¹ÑÉ…ÑÌ…É”µ…±™½Éµ•ˆ¤(€€€¥˜…É•…}½¹ÑÉ…Ð¹•Ð ‰½µ‰¥¹…Ñ¥½¹…°ˆ¤¥Ì¹½ÐQÉÕ”½È…É•…}½¹ÑÉ…Ð¹•Ð ‰±…Ñ•¹å}å±•Ìˆ¤€„ô€Àè(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰Ñ¥µ¥¹œÉ•ÅÕ¥É•Ì„é•É¼µå±”½µ‰¥¹…Ñ¥½¹…°Í½ÕÉ”½¹ÑÉ…Ðˆ¤(€€€¥¹ÁÕÑ}‰¥ÑÌ€ô…É•…}½¹ÑÉ…Ð¹•Ð ‰¥¹ÁÕÑ}½Õ¹Ðˆ°€À¤€¨…É•…}½¹ÑÉ…Ð¹•Ð ‰¥¹ÁÕÑ}Ý¥‘Ñ ˆ°€À¤(€€€½ÕÑÁÕÑ}‰¥ÑÌ€ô…É•…}½¹ÑÉ…Ð¹•Ð ‰½ÕÑÁÕÑ}½Õ¹Ðˆ°€À¤€¨…É•…}½¹ÑÉ…Ð¹•Ð (€€€€€€€€‰…ÕµÕ±…Ñ½É}Ý¥‘Ñ ˆ°€À(€€€€¤(€€€¥˜€ (€€€€€€€™½Éµ…±}Í½Á”¹•Ð ‰¥¹ÁÕÑ}‰¥ÑÌˆ¤€„ô¥¹ÁÕÑ}‰¥ÑÌ(€€€€€€€½È™½Éµ…±}Í½Á”¹•Ð ‰½ÕÑÁÕÑ}‰¥ÑÌˆ¤€„ô½ÕÑÁÕÑ}‰¥ÑÌ(€€€€¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰™½Éµ…°ÁÉ½½˜Ý¥‘Ñ¡Ì‘¥™™•È™É½´Ñ¡”	Í½ÕÉ”½¹ÑÉ…Ðˆ¤(€€€É•ÑÕÉ¸…É•„°™½Éµ…°(()‘•˜}Ñ•¡¹½±½å}¥¹ÁÕÑÌ (€€€…É•…}É½½ÐèA…Ñ °(€€€…É•„è‘¥ÑmÍÑÈ°¹åt°(€€€™½Éµ…°è‘¥ÑmÍÑÈ°¹åt°(€€€½¹ÑÉ…Ðè‘¥ÑmÍÑÈ°¹åt°(¤€´øÑÕÁ±•mA…Ñ °A…Ñ °ÍÑÉtè(€€€Ñ•¡¹½±½ä€ô…É•„¹•Ð ‰Ñ•¡¹½±½äˆ¤(€€€™½Éµ…±}Ñ•¡¹½±½ä€ô™½Éµ…°¹•Ð ‰Ñ•¡¹½±½äˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡Ñ•¡¹½±½ä°‘¥Ð¤½È¹½Ð¥Í¥¹ÍÑ…¹”¡™½Éµ…±}Ñ•¡¹½±½ä°‘¥Ð¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰Ñ•¡¹½±½äµ•Ñ…‘…Ñ„¥Ìµ…±™½Éµ•ˆ¤(€€€Ñ•¡¹½±½å}¥€ôÑ•¡¹½±½ä¹•Ð ‰Ñ•¡¹½±½å}¥ˆ¤(€€€¥˜½¹ÑÉ…Ñl‰Ñ•¡¹½±½å}¥‰t€„ôÑ•¡¹½±½å}¥è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰Ñ¥µ¥¹œ½¹ÑÉ…ÐÑ…É•ÑÌ„‘¥™™•É•¹ÐÑ•¡¹½±½äˆ¤(€€€¥˜™½Éµ…±}Ñ•¡¹½±½ä¹•Ð ‰Ñ•¡¹½±½å}¥ˆ¤€„ôÑ•¡¹½±½å}¥è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰™½Éµ…°•Ù¥‘•¹”Ñ…É•ÑÌ„‘¥™™•É•¹ÐÑ•¡¹½±½äˆ¤(€€€±¥‰•ÉÑä€ô}É•Í½±Ù•}¡…Í¡•‘}…ÉÑ¥™…Ð (€€€€€€€…É•…}É½½Ð°(€€€€€€€Ñ•¡¹½±½ä¹•Ð ‰±¥‰•ÉÑå}…ÉÑ¥™…Ðˆ¤°(€€€€€€€½¹Ñ•áÐô‰Ñ•¡¹½±½ä¹±¥‰•ÉÑå}…ÉÑ¥™…Ðˆ°(€€€€¤(€€€½¹™¥œ€ô}É•Í½±Ù•}¡…Í¡•‘}…ÉÑ¥™…Ð (€€€€€€€…É•…}É½½Ð°(€€€€€€€Ñ•¡¹½±½ä¹•Ð ‰½¹™¥ÕÉ…Ñ¥½¹}…ÉÑ¥™…Ðˆ¤°(€€€€€€€½¹Ñ•áÐô‰Ñ•¡¹½±½ä¹½¹™¥ÕÉ…Ñ¥½¹}…ÉÑ¥™…Ðˆ°(€€€€¤(€€€™½Éµ…±}±¥‰•ÉÑä€ô™½Éµ…±}Ñ•¡¹½±½ä¹•Ð ‰±¥‰•ÉÑäˆ¤(€€€™½Éµ…±}½¹™¥œ€ô™½Éµ…±}Ñ•¡¹½±½ä¹•Ð ‰½¹™¥ÕÉ…Ñ¥½¸ˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡™½Éµ…±}±¥‰•ÉÑä°‘¥Ð¤½È¹½Ð¥Í¥¹ÍÑ…¹”¡™½Éµ…±}½¹™¥œ°‘¥Ð¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰™½Éµ…°Ñ•¡¹½±½ä…ÉÑ¥™…ÑÌ…É”µ…±™½Éµ•ˆ¤(€€€¥˜™½Éµ…±}±¥‰•ÉÑä¹•Ð ‰Í¡„ÈÔØˆ¤€„ôÍ¡„ÈÔÙ}™¥±”¡±¥‰•ÉÑä¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰™½Éµ…°•Ù¥‘•¹”ÕÍ•Ì„‘¥™™•É•¹Ð1¥‰•ÉÑä‘¥•ÍÐˆ¤(€€€¥˜™½Éµ…±}½¹™¥œ¹•Ð ‰Í¡„ÈÔØˆ¤€„ôÍ¡„ÈÔÙ}™¥±”¡½¹™¥œ¤è(€€€€€€€É…¥Í”Q¥µ¥¹Ù¥‘•¹•ÉÉ½È ‰™½Éµ…°•Ù¥‘•¹”ÕÍ•Ì„‘¥™™•É•¹ÐÑ•¡¹½±½ä¼

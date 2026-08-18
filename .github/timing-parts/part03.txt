@@ -1,0 +1,178 @@
+ area_run.get(
+                        "critical_path_delay_picoseconds"
+                    ),
+                }
+            )
+
+    scope = formal.get("scope")
+    if not isinstance(scope, dict):
+        raise TimingEvidenceError("formal proof scope is malformed")
+    if scope.get("source_sweep_runs") != total_runs:
+        raise TimingEvidenceError("formal scope sweep count differs from source evidence")
+    if scope.get("unique_mapped_netlists_proved") != len(analyses):
+        raise TimingEvidenceError("formal scope unique-proof count differs from timed analyses")
+    return analyses
+
+
+def _analysis_script(module: str, contract: dict[str, Any]) -> str:
+    top = _safe_module(module, context="analysis.module")
+    clock = contract["virtual_clock_name"]
+    period = _tcl_number(float(contract["virtual_clock_period_ns"]))
+    input_delay = _tcl_number(float(contract["input_delay_ns"]))
+    output_delay = _tcl_number(float(contract["output_delay_ns"]))
+    output_load = _tcl_number(float(contract["output_load_pf"]))
+    driving_cell = contract["driving_cell"]
+    group_count = int(contract["group_path_count"])
+    endpoint_count = int(contract["endpoint_path_count"])
+    digits = int(contract["digits"])
+    commands = [
+        "read_liberty ../../../technology/technology.lib",
+        "read_verilog input.v",
+        f"link_design {top}",
+        f"create_clock -name {clock} -period {period}",
+        f"set_input_delay -clock {clock} {input_delay} [all_inputs]",
+        f"set_output_delay -clock {clock} {output_delay} [all_outputs]",
+        f"set_driving_cell -lib_cell {driving_cell} [all_inputs]",
+        f"set_load {output_load} [all_outputs]",
+        f'puts "HEPHAESTUS_PERIOD_NS {period}"',
+        f'puts "HEPHAESTUS_INPUT_DELAY_NS {input_delay}"',
+        f'puts "HEPHAESTUS_OUTPUT_DELAY_NS {output_delay}"',
+        f'puts "HEPHAESTUS_OUTPUT_LOAD_PF {output_load}"',
+        f'puts "HEPHAESTUS_DRIVING_CELL {driving_cell}"',
+        "if { ![check_setup -verbose] } {",
+        '  puts "HEPHAESTUS_ERROR check_setup_failed"',
+        "  exit 2",
+        "}",
+        "report_units",
+        'puts "HEPHAESTUS_BEGIN_UNCONSTRAINED"',
+        (
+            "report_checks -unconstrained -path_delay max "
+            f"-group_path_count {group_count} -endpoint_path_count {endpoint_count} "
+            f"-digits {digits}"
+        ),
+        'puts "HEPHAESTUS_END_UNCONSTRAINED"',
+        'puts "HEPHAESTUS_BEGIN_MAX_PATHS"',
+        (
+            "report_checks -path_delay max "
+            f"-group_path_count {group_count} -endpoint_path_count {endpoint_count} "
+            f"-sort_by_slack -digits {digits} "
+            "-fields {slew capacitance input_pin net fanout}"
+        ),
+        'puts "HEPHAESTUS_END_MAX_PATHS"',
+        f"report_worst_slack -max -digits {digits}",
+        f"report_tns -max -digits {digits}",
+        "report_design_area",
+        "exit 0",
+        "",
+    ]
+    return "\n".join(commands)
+
+
+def _section(text: str, begin: str, end: str) -> str:
+    pattern = re.compile(re.escape(begin) + r"\n(.*?)\n" + re.escape(end), re.DOTALL)
+    match = pattern.search(text)
+    if match is None:
+        raise TimingEvidenceError(f"OpenSTA output is missing section {begin!r}")
+    return match.group(1)
+
+
+def _parse_one(pattern: str, text: str, *, context: str) -> float:
+    matches = re.findall(pattern, text, re.MULTILINE)
+    if len(matches) != 1:
+        raise TimingEvidenceError(f"{context}: expected one value, found {matches}")
+    result = float(matches[0])
+    if not math.isfinite(result):
+        raise TimingEvidenceError(f"{context}: value is not finite")
+    return result
+
+
+def _parse_output(text: str, *, context: str) -> dict[str, Any]:
+    errors = [line for line in text.splitlines() if line.startswith("Error:")]
+    if errors or "HEPHAESTUS_ERROR" in text:
+        raise TimingEvidenceError(
+            f"OpenSTA reported errors for {context}: {errors[:3]}"
+        )
+    unconstrained = _section(
+        text,
+        "HEPHAESTUS_BEGIN_UNCONSTRAINED",
+        "HEPHAESTUS_END_UNCONSTRAINED",
+    )
+    maximum = _section(text, "HEPHAESTUS_BEGIN_MAX_PATHS", "HEPHAESTUS_END_MAX_PATHS")
+    if "Startpoint:" in unconstrained or "Endpoint:" in unconstrained:
+        raise TimingEvidenceError("OpenSTA found unconstrained paths for {context}")
+    startpoints = re.findall(r"^Startpoint:\s*(.+)$", maximum, re.MULTILINE)
+    endpoints = re.findall(r"^Endpoint:\s*(.+)$", maximum, re.MULTILINE)
+    arrivals = [
+        float(value)
+        for value in re.findall(
+            r"^\s*([+-]?[0-9]+(?:\.[0-9]+)?)\s+data arrival time\s*$",
+            maximum,
+            re.MULTILINE,
+        )
+    ]
+    if not startpoints or not endpoints or not arrivals:
+        raise TimingEvidenceError(f"OpenSTA did not report a detailed max path for {context}")
+    if len(startpoints) != len(endpoints) or len(arrivals) != len(startpoints):
+        raise TimingEvidenceError(
+            f"OpenSTA path sections are inconsistent for {context}"
+        )
+    period = _parse_one(
+        r"^HEPHAESTUS_PERIOD_NS\s+([-+0-9.eE]+)\s*$",
+        text,
+        context=f"{context}.period",
+    )
+    worst_slack = _parse_one(
+        r"^worst slack max\s+([-+0-9.eE]+)\s*$",
+        text,
+        context=f"{context}.worst_slack",
+    )
+    tns = _parse_one(
+        r"^tns max\s+([-+0-9.eQ]+)\s*$",
+        text,
+        context=f"{context}.tns",
+    )
+    derived_delay = period - worst_slack
+    if derived_delay <= 0:
+        raise TimingEvidenceError(f"OpenSTA reported a non-positive delay for {context}")
+    worst_arrival = max(arrivals)
+    if not math.isclose(derived_delay, worst_arrival, rel_tol=0, abs_tol=1e-5):
+        raise TimingEvidenceError(
+            f"OpenSTA slack-derived and path-reported delays disagree for {context}: "
+            f"{derived_delay} vs {worst_arrival}"
+        )
+    return {
+        "reported_path_count": len(arrivals),
+        "startpoints": startpoints,
+        "endpoints": endpoints,
+        "arrival_times_ns": arrivals,
+        "worst_data_arrival_ns": worst_arrival,
+        "virtual_clock_period_ns": period,
+        "worst_slack_ns": worst_slack,
+        "total_negative_slack_ns": tns,
+        "slack_derived_data_delay_ns": derived_delay,
+        "unconstrained_paths_found": False,
+        "warning_lines": [line for line in text.splitlines() if line.startswith("Warning:")],
+    }
+
+
+def _run_once(
+    *,
+    executable: Path,
+    run_dir: Path,
+    attempt: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    stdout = run_dir / f"opensta.{attempt}.stdout.txt"
+    stderr = run_dir / f"opensta.{attempt}.stderr.txt"
+    try:
+        completed = subprocess.run(
+            [str(executable), "analysis.tcl"],
+            cwd=run_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+         )
+    except subprocess.TimeoutExpired as exc:
+        raise TimingEvidenceError(&"OpenSTA timed out for {run_dir.name}") from exc
+    stdout.write_text
