@@ -4,11 +4,10 @@ on:
   push:
     branches:
       - research/openroad-registered-smoke
-  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -119,15 +118,15 @@ jobs:
           ' > build/openroad-smoke/provenance/tool-versions.txt 2>&1
 
       - name: Run the registered shared DAG through RTL-to-GDS
+        id: orfs
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p \
             build/openroad-smoke/results \
             build/openroad-smoke/reports \
             build/openroad-smoke/logs \
             build/openroad-smoke/objects
 
-          set +e
           docker run --rm \
             -e HEPHAESTUS_REGISTERED_DIR=/work/registered \
             -v "$PWD/build/openroad-smoke/registered:/work/registered:ro" \
@@ -147,18 +146,91 @@ jobs:
             > build/openroad-smoke/orfs.stdout.txt \
             2> build/openroad-smoke/orfs.stderr.txt
           returncode=$?
-          set -e
           printf '%s\n' "$returncode" \
             > build/openroad-smoke/orfs.returncode.txt
-          if [ "$returncode" -ne 0 ]; then
-            tail -n 200 build/openroad-smoke/orfs.stdout.txt || true
-            tail -n 200 build/openroad-smoke/orfs.stderr.txt || true
-            exit "$returncode"
+          printf 'returncode=%s\n' "$returncode" >> "$GITHUB_OUTPUT"
+          sudo chown -R "$(id -u):$(id -g)" build/openroad-smoke || true
+          exit 0
+
+      - name: Preserve synthesized-netlist diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          diagnostics=build/openroad-smoke/diagnostics
+          mkdir -p "$diagnostics"
+
+          find build/openroad-smoke \
+            -maxdepth 8 \
+            -type f \
+            -printf '%p\t%s bytes\n' \
+            | sort \
+            > "$diagnostics/file-inventory.tsv"
+
+          mapfile -t netlists < <(
+            find build/openroad-smoke/results \
+              -type f \
+              -name '1_2_yosys.v' \
+              | sort
+          )
+          printf '%s\n' "${netlists[@]:-}" \
+            > "$diagnostics/synthesized-netlist-paths.txt"
+
+          if [ "${#netlists[@]}" -eq 1 ]; then
+            netlist=${netlists[0]}
+            cp "$netlist" "$diagnostics/1_2_yosys.v"
+            sha256sum "$netlist" \
+              | tee "$diagnostics/1_2_yosys.sha256"
+            file "$netlist" \
+              | tee "$diagnostics/1_2_yosys.file.txt"
+            nl -ba "$netlist" \
+              | sed -n '1,100p' \
+              | tee "$diagnostics/1_2_yosys.lines-1-100.txt"
+
+            NETLIST="$netlist" python - <<'PY' \
+              | tee "$diagnostics/1_2_yosys.line-bytes.txt"
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ['NETLIST'])
+          raw = path.read_bytes()
+          lines = raw.splitlines(keepends=True)
+          print(f'path={path}')
+          print(f'bytes={len(raw)}')
+          print(f'line_count={len(lines)}')
+          for number in range(1, min(len(lines), 40) + 1):
+              value = lines[number - 1]
+              print(f'{number:04d}: repr={value!r}')
+              if number == 17:
+                  print(f'0017-hex={value.hex()}')
+          PY
+
+            set +e
+            iverilog -g2012 -tnull -i "$netlist" \
+              > "$diagnostics/iverilog.stdout.txt" \
+              2> "$diagnostics/iverilog.stderr.txt"
+            printf '%s\n' "$?" \
+              > "$diagnostics/iverilog.returncode.txt"
+            yosys -Q -p "read_verilog -sv $netlist" \
+              > "$diagnostics/yosys-read.stdout.txt" \
+              2> "$diagnostics/yosys-read.stderr.txt"
+            printf '%s\n' "$?" \
+              > "$diagnostics/yosys-read.returncode.txt"
+            set -e
+          else
+            printf 'expected one synthesized netlist, found %s\n' \
+              "${#netlists[@]}" \
+              | tee "$diagnostics/netlist-count-error.txt"
           fi
 
+          tail -n 300 build/openroad-smoke/orfs.stdout.txt \
+            > "$diagnostics/orfs.stdout.tail.txt" || true
+          tail -n 300 build/openroad-smoke/orfs.stderr.txt \
+            > "$diagnostics/orfs.stderr.tail.txt" || true
+
       - name: Build a fail-closed smoke manifest
+        if: steps.orfs.outputs.returncode == '0'
         env:
-          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GITHUB_HEAD_SHA: ${{ github.sha }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
         run: |
           python - <<'PY'
@@ -310,9 +382,21 @@ jobs:
           PY
 
       - name: Upload the complete research smoke bundle
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hephaestus-openroad-registered-shared-dag-smoke
           path: build/openroad-smoke
           if-no-files-found: error
           retention-days: 30
+
+      - name: Fail when the ORFS flow did not complete
+        if: always()
+        env:
+          ORFS_RETURNCODE: ${{ steps.orfs.outputs.returncode }}
+        run: |
+          set -euo pipefail
+          if [ "${ORFS_RETURNCODE:-missing}" != '0' ]; then
+            echo "ORFS did not complete: return code ${ORFS_RETURNCODE:-missing}"
+            exit 1
+          fi
