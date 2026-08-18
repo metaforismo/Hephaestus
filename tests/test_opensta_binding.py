@@ -26,6 +26,8 @@ def _positive_proof(digest: str) -> dict[str, object]:
 
 
 def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
+    abc_digest = "a" * 64
+    liberty_digest = "b" * 64
     backends = ("shared_dag", "naive_shift_add", "constant_multipliers")
     formal_backends: dict[str, object] = {}
     timing_results: list[dict[str, object]] = []
@@ -52,11 +54,19 @@ def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
                 "attempts": 2,
                 "abc_library_area": 10.0 + index,
                 "abc_delay_picoseconds": 100.0 + index,
+                "virtual_clock_period_ns": 4.0,
+                "input_delay_ns": 0.0,
+                "output_delay_ns": 0.0,
+                "output_load_pf": 0.01,
+                "driving_cell": "sg13g2_buf_4",
                 "timing": {
                     "returncode": 0,
                     "period_ns": 4.0,
                     "derived_data_delay_ns": 2.0,
                     "worst_slack_ns": 2.0,
+                    "total_negative_slack_ns": 0.0,
+                    "stdout_sha256": "c" * 64,
+                    "stderr_sha256": "d" * 64,
                 },
             }
         )
@@ -64,8 +74,12 @@ def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
     formal = {
         "schema": "hephaestus.abc-area-delay-formal-evidence.v1",
         "evidence_level": "yosys_sat_abc_area_delay_mapped_equivalence",
+        "source": {"abc_area_delay_evidence_sha256": abc_digest},
         "backends": formal_backends,
-        "technology": {"technology_id": "test"},
+        "technology": {
+            "technology_id": "test",
+            "liberty": {"sha256": liberty_digest},
+        },
         "negative_control": {
             "proof": {
                 "performed": True,
@@ -87,8 +101,26 @@ def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
     timing = {
         "schema": "hephaestus.opensta-sdc-probe.v1",
         "evidence_level": "opensta_sdc_pre_layout_timing_probe",
-        "assumptions": {"virtual_clock_period_ns": 4.0},
-        "tool": {"commit": "a" * 40},
+        "source": {
+            "abc_area_delay_evidence_sha256": abc_digest,
+            "liberty_sha256": liberty_digest,
+        },
+        "assumptions": {
+            "virtual_clock_period_ns": 4.0,
+            "input_delay_ns": 0.0,
+            "output_delay_ns": 0.0,
+            "output_load_pf": 0.01,
+            "driving_cell": "sg13g2_buf_4",
+            "parasitics": None,
+            "wire_model": "test pre-layout model",
+        },
+        "tool": {
+            "schema": "hephaestus.opensta-tool.v1",
+            "repository": "parallaxsw/OpenSTA",
+            "commit": "e" * 40,
+            "binary_sha256": "f" * 64,
+            "binary_reproducibility_verified": False,
+        },
         "results": timing_results,
         "claims": {
             "opensta_binary_built_from_pinned_source": True,
@@ -122,6 +154,8 @@ def test_binding_requires_exact_formal_digests(tmp_path: Path) -> None:
 
     assert result["scope"]["formally_proved_timed_netlists"] == 3
     assert result["scope"]["unique_mapped_verilog_digests"] == 3
+    assert result["source"]["abc_area_delay_evidence_sha256"] == "a" * 64
+    assert result["source"]["liberty_sha256"] == "b" * 64
     assert result["claims"]["all_timed_netlists_formally_equivalent"]
     assert result["claims"]["signoff_sta_performed"] is False
     assert output.is_file()
@@ -171,4 +205,50 @@ def test_binding_rejects_duplicate_mapped_digests(tmp_path: Path) -> None:
     _write(timing_path, timing)
 
     with pytest.raises(OpenSTABindingError, match="unexpectedly reuse"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_requires_the_same_abc_source(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["source"]["abc_area_delay_evidence_sha256"] = "0" * 64
+    _write(timing_path, timing)
+
+    with pytest.raises(OpenSTABindingError, match="source digests differ"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_requires_the_same_liberty(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["source"]["liberty_sha256"] = "0" * 64
+    _write(timing_path, timing)
+
+    with pytest.raises(OpenSTABindingError, match="Liberty digests differ"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_rejects_invalid_digest_and_metrics(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["results"][0]["mapped_verilog_sha256"] = "g" * 64
+    _write(timing_path, timing)
+    with pytest.raises(OpenSTABindingError, match="SHA-256"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["results"][0]["abc_library_area"] = 0.0
+    _write(timing_path, timing)
+    with pytest.raises(OpenSTABindingError, match="abc_library_area"):
+        build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
+
+
+def test_binding_rejects_result_contract_drift(tmp_path: Path) -> None:
+    formal_path, timing_path = _fixtures(tmp_path)
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    timing["results"][0]["output_load_pf"] = 0.02
+    _write(timing_path, timing)
+
+    with pytest.raises(OpenSTABindingError, match="differs from the timing contract"):
         build_opensta_formal_binding(formal_path, timing_path, tmp_path / "out.json")
