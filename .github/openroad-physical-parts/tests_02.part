@@ -1,0 +1,118 @@
+
+
+def test_prepare_emits_three_digest_bound_designs(tmp_path: Path) -> None:
+    config = _config()
+    config_path = tmp_path / "physical_config.json"
+    _write_json(config_path, config)
+    bundle = _registered_bundle(tmp_path)
+    output = tmp_path / "prepared"
+
+    manifest = prepare_openroad_designs(bundle, config_path, output)
+
+    assert manifest["schema"] == "hephaestus.openroad-physical-prepared.v1"
+    assert set(manifest["designs"]) == set(BACKENDS)
+    assert manifest["claims"]["three_matched_physical_inputs_prepared"]
+    assert manifest["claims"]["placement_performed"] is False
+    for backend in BACKENDS:
+        design = manifest["designs"][backend]
+        assert design["nickname"] == f"hephaestus_registered_tiny_{backend}"
+        assert (output / design["design_dir"] / "core.sv").is_file()
+        assert (output / design["design_dir"] / "wrapper.sv").is_file()
+        assert (output / design["design_dir"] / "constraints.sdc").is_file()
+        assert (output / design["design_dir"] / "config.mk").is_file()
+
+
+def test_prepare_rejects_unverified_registered_source(tmp_path: Path) -> None:
+    config_path = tmp_path / "physical_config.json"
+    _write_json(config_path, _config())
+    bundle = _registered_bundle(tmp_path)
+    manifest_path = bundle / "registered_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["claims"]["registered_backends_match_oracle_on_executed_schedule"] = False
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(OpenROADPhysicalError, match="not fully qualified"):
+        prepare_openroad_designs(bundle, config_path, tmp_path / "prepared")
+
+
+def test_prepare_rejects_an_escaping_registered_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "physical_config.json"
+    _write_json(config_path, _config())
+    bundle = _registered_bundle(tmp_path)
+    manifest_path = bundle / "registered_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["backends"]["shared_dag"]["core_rtl"] = "../outside.sv"
+    _write_json(manifest_path, manifest)
+    (tmp_path / "outside.sv").write_text("module outside; endmodule\n", encoding="utf-8")
+
+    with pytest.raises(OpenROADPhysicalError, match="escapes"):
+        prepare_openroad_designs(bundle, config_path, tmp_path / "prepared")
+
+
+def test_bind_accepts_repeatable_matched_physical_outputs(tmp_path: Path) -> None:
+    prepared, _, config = _prepared_fixture(tmp_path)
+    runs, control = _stage_runs(tmp_path, prepared, config)
+    output = tmp_path / "evidence"
+
+    evidence = bind_openroad_results(prepared, runs, control, output)
+
+    assert evidence["schema"] == (
+        "hephaestus.openroad-registered-physical-evidence.v1"
+    )
+    assert set(evidence["backends"]) == set(BACKENDS)
+    assert all(
+        evidence["backends"][backend]["repeatability"]["passed"]
+        for backend in BACKENDS
+    )
+    assert evidence["claims"]["all_three_openroad_flows_completed"]
+    assert evidence["claims"]["physical_repeatability_verified"]
+    assert evidence["claims"]["digest_binding_negative_control_detected"]
+    assert evidence["claims"]["post_physical_equivalence_verified"] is False
+    assert evidence["claims"]["independent_drc_verified"] is False
+    assert (output / "openroad_physical_evidence.json").is_file()
+
+
+def test_bind_rejects_a_tampered_physical_output(tmp_path: Path) -> None:
+    prepared, _, config = _prepared_fixture(tmp_path)
+    runs, control = _stage_runs(tmp_path, prepared, config)
+    gds = runs / "shared_dag" / "attempt_1" / "final" / "6_final.gds"
+    gds.write_bytes(gds.read_bytes() + b"xx")
+
+    with pytest.raises(OpenROADPhysicalError, match="digest mismatch"):
+        bind_openroad_results(prepared, runs, control, tmp_path / "evidence")
+
+
+def test_bind_rejects_physical_repeatability_drift(tmp_path: Path) -> None:
+    prepared, _, config = _prepared_fixture(tmp_path)
+    runs, control = _stage_runs(
+        tmp_path,
+        prepared,
+        config,
+        drift_backend="naive_shift_add",
+    )
+
+    with pytest.raises(OpenROADPhysicalError, match="repeatability drift"):
+        bind_openroad_results(prepared, runs, control, tmp_path / "evidence")
+
+
+def test_bind_rejects_an_ineffective_negative_control(tmp_path: Path) -> None:
+    prepared, _, config = _prepared_fixture(tmp_path)
+    runs, control = _stage_runs(tmp_path, prepared, config)
+    payload = json.loads(control.read_text(encoding="utf-8"))
+    payload["detected"] = False
+    _write_json(control, payload)
+
+    with pytest.raises(OpenROADPhysicalError, match="not detected"):
+        bind_openroad_results(prepared, runs, control, tmp_path / "evidence")
+
+
+def test_bind_rejects_a_different_prepared_manifest(tmp_path: Path) -> None:
+    prepared, _, config = _prepared_fixture(tmp_path)
+    runs, control = _stage_runs(tmp_path, prepared, config)
+    run_path = runs / "constant_multipliers" / "attempt_2" / "run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["prepared_manifest_sha256"] = "0" * 64
+    _write_json(run_path, run)
+
+    with pytest.raises(OpenROADPhysicalError, match="different inputs"):
+        bind_openroad_results(prepared, runs, control, tmp_path / "evidence")
