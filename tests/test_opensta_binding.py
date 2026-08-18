@@ -162,12 +162,10 @@ def test_binding_rejects_duplicate_mapped_digests(tmp_path: Path) -> None:
     formal = json.loads(formal_path.read_text(encoding="utf-8"))
     timing = json.loads(timing_path.read_text(encoding="utf-8"))
     digest = formal["backends"]["shared_dag"]["runs"]["unconstrained"]["mapped_verilog_sha256"]
-    formal["backends"]["naive_shift_add"]["runs"]["unconstrained"][
-        "mapped_verilog_sha256"
-    ] = digest
-    formal["backends"]["naive_shift_add"]["proofs"]["unconstrained"][
-        "mapped_verilog_sha256"
-    ] = digest
+    formal["backends"]["naive_shift_add"]["runs"]["unconstrained"]["mapped_verilog_sha256"] = digest
+    formal["backends"]["naive_shift_add"]["proofs"]["unconstrained"]["mapped_verilog_sha256"] = (
+        digest
+    )
     timing["results"][1]["mapped_verilog_sha256"] = digest
     _write(formal_path, formal)
     _write(timing_path, timing)
