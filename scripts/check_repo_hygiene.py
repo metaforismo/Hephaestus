@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
-
 BLOCKED_PARTS = {
     ".mypy_cache",
     ".pytest_cache",
@@ -40,11 +39,7 @@ def tracked_files() -> list[PurePosixPath]:
         check=True,
         capture_output=True,
     )
-    return [
-        PurePosixPath(raw.decode("utf-8"))
-        for raw in completed.stdout.split(b"\0")
-        if raw
-    ]
+    return [PurePosixPath(raw.decode("utf-8")) for raw in completed.stdout.split(b"\0") if raw]
 
 
 def violations(paths: list[PurePosixPath]) -> list[str]:
