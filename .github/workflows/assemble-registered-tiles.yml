@@ -1,16 +1,16 @@
 name: One-shot assemble registered tiles
 
 on:
-  push:
-    branches:
-      - feat/registered-matched-tiles
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   assemble:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.head_ref == 'feat/registered-matched-tiles' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
