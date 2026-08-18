@@ -25,7 +25,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p src/hephaestus tests
-          cat .github/registered-parts/module_*.part \
+          cat \
+            .github/registered-parts/module_00.part \
+            .github/registered-parts/module_01.part \
+            .github/registered-parts/module_02a.part \
+            .github/registered-parts/module_02b.part \
+            .github/registered-parts/module_03.part \
+            .github/registered-parts/module_04.part \
+            .github/registered-parts/module_05.part \
+            .github/registered-parts/module_06.part \
             > src/hephaestus/registered.py
           cat .github/registered-parts/tests_*.part \
             > tests/test_registered.py
