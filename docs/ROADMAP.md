@@ -43,13 +43,33 @@ original graph numerically with simulated quantized operators.
 **Exit criterion:** compile transformer-sized tiles without superlinear memory growth and show
 post-synthesis savings over a direct multiplier/ROM baseline.
 
+## M3.5 — Registered matched tile boundary — implemented for the regression microcase
+
+- Bind each registered wrapper to an already verified matched RTL bundle.
+- Require exhaustive combinational proofs and an effective formal negative control for the source
+  cores before registration.
+- Apply identical input registers, output registers, reset behavior, valid propagation, and bus
+  widths to shared-DAG, naive shift/add, and constant-multiplier backends.
+- Verify one-cycle latency and initiation interval one against an independent arithmetic oracle.
+- Exercise continuous traffic, valid bubbles, reset clearing, and a data-dependent simulation
+  negative control.
+- Preserve a versioned registered evidence manifest and regression reference.
+
+**Exit criterion met for the 4×6 microcase:** all three wrappers accept one transaction per cycle,
+return it one cycle later, match the independent oracle across 272 valid vectors plus 39 bubbles,
+and detect the injected negative-control fault. This is simulation evidence, not sequential formal
+proof or physical timing closure.
+
 ## M4 — Open-PDK RTL-to-GDS
 
-- IHP SG13G2 or another production-accessible open-PDK backend.
-- Clocked tile, SRAM/stream interfaces, reset, scan/DFT plan, and pad-ring wrapper.
-- Yosys/OpenROAD/KLayout automation.
-- DRC, LVS, STA, extraction, and switching-based power reports.
-- Formal and gate-level equivalence.
+- Consume the registered matched tile contract in a pinned IHP SG13G2 or other
+  production-accessible open-PDK backend.
+- Add clock constraints, physical I/O planning, utilization and floorplan contracts, reset handling,
+  scan/DFT planning, and eventually a pad-ring wrapper.
+- Automate matched Yosys/OpenROAD/KLayout runs for all three backends.
+- Preserve synthesis, placement, routing, congestion, STA, extraction, and switching-based power
+  reports with exact artifact provenance.
+- Add sequential, gate-level, and post-layout equivalence layers with independent negative controls.
 
 **Exit criterion:** reproducible DRC/LVS-clean GDS and post-layout evidence from a clean checkout.
 
