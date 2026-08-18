@@ -1,0 +1,252 @@
+
+
+def canonical_gds_sha256(path: Path) -> str:
+    """Hash GDS geometry while normalizing BGNLIB/BGNSTR timestamps."""
+
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise OpenROADPhysicalError(f"cannot read GDS artifact {path}: {exc}") from exc
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < len(content):
+        if offset + 4 > len(content):
+            raise OpenROADPhysicalError(f"truncated GDS record header in {path}")
+        length = int.from_bytes(content[offset : offset + 2], "big")
+        if length < 4 or length % 2 or offset + length > len(content):
+            raise OpenROADPhysicalError(f"invalid GDS record length {length} in {path}")
+        record = bytearray(content[offset : offset + length])
+        record_type = record[2]
+        if record_type in (0x01, 0x05):
+            record[4:] = b"\x00" * (length - 4)
+        digest.update(record)
+        offset += length
+    if offset != len(content):
+        raise OpenROADPhysicalError(f"GDS parser did not consume {path}")
+    return digest.hexdigest()
+
+
+def _normalized_text_sha256(path: Path, *, volatile_prefixes: tuple[str, ...]) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise OpenROADPhysicalError(f"cannot read text artifact {path}: {exc}") from exc
+    normalized: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        replacement = next(
+            (prefix for prefix in volatile_prefixes if stripped.startswith(prefix)),
+            None,
+        )
+        if replacement is not None:
+            normalized.append(f"{replacement} <normalized>")
+        else:
+            normalized.append(line.rstrip())
+    payload = ("\n".join(normalized) + "\n").encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def normalized_def_sha256(path: Path) -> str:
+    """Hash a routed DEF while ignoring explicit generator-date comments."""
+
+    return _normalized_text_sha256(
+        path,
+        volatile_prefixes=("# DATE", "# Generated on", "# generated on"),
+    )
+
+
+def normalized_spef_sha256(path: Path) -> str:
+    """Hash extracted RC while ignoring the SPEF generation date."""
+
+    return _normalized_text_sha256(path, volatile_prefixes=("*DATE",))
+
+
+def _load_prepared(prepared_dir: Path) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    root = prepared_dir.resolve()
+    manifest_path = root / "openroad_prepared.json"
+    if not manifest_path.is_file():
+        raise OpenROADPhysicalError("prepared bundle is missing openroad_prepared.json")
+    prepared = _load_json(manifest_path)
+    if prepared.get("schema") != "hephaestus.openroad-physical-prepared.v1":
+        raise OpenROADPhysicalError("unsupported prepared physical-evidence schema")
+    claims = prepared.get("claims")
+    if not isinstance(claims, dict) or claims.get(
+        "three_matched_physical_inputs_prepared"
+    ) is not True:
+        raise OpenROADPhysicalError("physical inputs were not prepared successfully")
+    if any(
+        claims.get(name) is not False
+        for name in (
+            "openroad_flow_completed",
+            "placement_performed",
+            "routing_performed",
+            "physical_repeatability_verified",
+        )
+    ):
+        raise OpenROADPhysicalError("prepared input manifest overstates physical evidence")
+    config_spec = prepared.get("physical_config")
+    if not isinstance(config_spec, dict):
+        raise OpenROADPhysicalError("prepared physical config binding is malformed")
+    config_path = _resolve_artifact(
+        root,
+        config_spec.get("path"),
+        config_spec.get("sha256"),
+        context="prepared physical config",
+    )
+    config = load_physical_config(config_path)
+    if config["config_id"] != config_spec.get("config_id"):
+        raise OpenROADPhysicalError("prepared config identity drifted")
+    source = prepared.get("source")
+    if not isinstance(source, dict):
+        raise OpenROADPhysicalError("prepared registered-source binding is malformed")
+    _resolve_artifact(
+        root,
+        source.get("registered_manifest"),
+        source.get("registered_manifest_sha256"),
+        context="prepared registered manifest",
+    )
+    designs = prepared.get("designs")
+    if not isinstance(designs, dict) or set(designs) != set(BACKENDS):
+        raise OpenROADPhysicalError("prepared bundle does not contain three matched designs")
+    return prepared, config, manifest_path
+
+
+def _run_output_signatures(artifacts: dict[str, Path]) -> dict[str, str]:
+    return {
+        "final_gds_canonical_sha256": canonical_gds_sha256(artifacts["final_gds"]),
+        "final_def_normalized_sha256": normalized_def_sha256(artifacts["final_def"]),
+        "final_verilog_sha256": sha256_file(artifacts["final_verilog"]),
+        "final_spef_normalized_sha256": normalized_spef_sha256(
+            artifacts["final_spef"]
+        ),
+    }
+
+
+def _load_run(
+    run_dir: Path,
+    *,
+    prepared: dict[str, Any],
+    config: dict[str, Any],
+    prepared_manifest_path: Path,
+    backend: str,
+    attempt: int,
+) -> dict[str, Any]:
+    root = run_dir.resolve()
+    run_manifest_path = root / "run.json"
+    if not run_manifest_path.is_file():
+        raise OpenROADPhysicalError(
+            f"physical run {backend}/attempt_{attempt} is missing run.json"
+        )
+    run = _load_json(run_manifest_path)
+    if run.get("schema") != "hephaestus.openroad-physical-run.v1":
+        raise OpenROADPhysicalError(f"unsupported physical-run schema for {backend}")
+    if run.get("backend") != backend or run.get("attempt") != attempt:
+        raise OpenROADPhysicalError(f"physical run identity drifted for {backend}")
+    if run.get("completed") is not True or run.get("returncode") != 0:
+        raise OpenROADPhysicalError(f"ORFS did not complete successfully for {backend}")
+    if run.get("platform") != config["platform"]:
+        raise OpenROADPhysicalError(f"physical platform drifted for {backend}")
+    expected_design = prepared["designs"][backend]
+    if (
+        run.get("wrapper_module") != expected_design["wrapper_module"]
+        or run.get("design_nickname") != expected_design["nickname"]
+        or run.get("flow_variant") != expected_design["flow_variant"]
+    ):
+        raise OpenROADPhysicalError(f"physical design identity drifted for {backend}")
+    if run.get("prepared_manifest_sha256") != sha256_file(prepared_manifest_path):
+        raise OpenROADPhysicalError(f"physical run is bound to different inputs for {backend}")
+
+    toolchain = run.get("toolchain")
+    if not isinstance(toolchain, dict):
+        raise OpenROADPhysicalError(f"physical toolchain is malformed for {backend}")
+    expected_toolchain = config["toolchain"]
+    if toolchain.get("docker_image") != expected_toolchain["docker_image"]:
+        raise OpenROADPhysicalError(f"physical Docker image drifted for {backend}")
+    if toolchain.get("docker_repo_digest") != expected_toolchain["docker_repo_digest"]:
+        raise OpenROADPhysicalError(f"physical Docker digest drifted for {backend}")
+    if toolchain.get("captured_versions") != expected_toolchain["captured_versions"]:
+        raise OpenROADPhysicalError(f"physical tool versions drifted for {backend}")
+    if toolchain.get("orfs_git_head") != expected_toolchain["orfs_git_head"]:
+        raise OpenROADPhysicalError(f"physical ORFS source identity drifted for {backend}")
+
+    artifact_specs = run.get("artifacts")
+    if not isinstance(artifact_specs, dict) or set(artifact_specs) != set(REQUIRED_OUTPUTS):
+        raise OpenROADPhysicalError(f"physical output set drifted for {backend}")
+    artifacts: dict[str, Path] = {}
+    normalized_artifacts: dict[str, Any] = {}
+    for label in REQUIRED_OUTPUTS:
+        specification = artifact_specs[label]
+        if not isinstance(specification, dict):
+            raise OpenROADPhysicalError(f"physical artifact {backend}/{label} is malformed")
+        path = _resolve_artifact(
+            root,
+            specification.get("path"),
+            specification.get("sha256"),
+            context=f"{backend}.attempt_{attempt}.{label}",
+        )
+        size = _positive_int(specification.get("size_bytes"), context=f"{label}.size")
+        if path.stat().st_size != size:
+            raise OpenROADPhysicalError(f"physical artifact size drifted for {backend}/{label}")
+        artifacts[label] = path
+        normalized_artifacts[label] = {
+            "path": path.relative_to(root).as_posix(),
+            "size_bytes": size,
+            "sha256": sha256_file(path),
+        }
+
+    metadata_spec = run.get("metadata")
+    metadata: dict[str, Any] | None = None
+    metadata_binding: dict[str, Any] | None = None
+    if metadata_spec is not None:
+        if not isinstance(metadata_spec, dict):
+            raise OpenROADPhysicalError(f"physical metadata binding is malformed for {backend}")
+        metadata_path = _resolve_artifact(
+            root,
+            metadata_spec.get("path"),
+            metadata_spec.get("sha256"),
+            context=f"{backend}.attempt_{attempt}.metadata",
+        )
+        metadata = _load_json(metadata_path)
+        metadata_binding = {
+            "path": metadata_path.relative_to(root).as_posix(),
+            "sha256": sha256_file(metadata_path),
+        }
+
+    return {
+        "backend": backend,
+        "attempt": attempt,
+        "run_manifest": run_manifest_path.relative_to(root).as_posix(),
+        "run_manifest_sha256": sha256_file(run_manifest_path),
+        "artifacts": normalized_artifacts,
+        "signatures": _run_output_signatures(artifacts),
+        "metadata": metadata_binding,
+        "metadata_payload": metadata,
+        "toolchain": toolchain,
+    }
+
+
+def _compare_attempts(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    if first["backend"] != second["backend"]:
+        raise OpenROADPhysicalError("cannot compare physical attempts from different backends")
+    signatures = first["signatures"]
+    repeated = second["signatures"]
+    mismatches = [
+        label for label, digest in signatures.items() if repeated.get(label) != digest
+    ]
+    if mismatches:
+        raise OpenROADPhysicalError(
+            f"physical repeatability drift for {first['backend']}: {', '.join(mismatches)}"
+        )
+    return {
+        "passed": True,
+        "compared_attempts": [first["attempt"], second["attempt"]],
+        "stable_signatures": signatures,
+        "raw_open_db_identical": (
+            first["artifacts"]["final_open_db"]["sha256"]
+            == second["artifacts"]["final_open_db"]["sha256"]
+        ),
+        "note": (
+            "GDS timestamps, DEF generator-date comments, and SPEF dates are normalized; "
+            "OpenDB bytes remain per-run provenance."
+        ),
+    }
