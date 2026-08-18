@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/opensta-timing-evidence
   pull_request:
   workflow_dispatch:
 
@@ -45,20 +44,23 @@ jobs:
             'yosys-abc=0.33-5build2'
       - name: Build the captured OpenSTA binary
         run: bash scripts/build_pinned_opensta.sh build/opensta-evidence/tooling
-      - name: Install and lint Hephaestus
+      - name: Install, lint, and test Hephaestus timing evidence
         run: |
           python -m pip install -e '.[dev]'
           ruff check \
             src/hephaestus/opensta_binding.py \
+            src/hephaestus/opensta_timing.py \
             tests/test_opensta_binding.py \
-            scripts/opensta_sdc_probe.py \
-            scripts/opensta_sdc_probe_base.py
+            tests/test_opensta_timing.py
           ruff format --check \
             src/hephaestus/opensta_binding.py \
+            src/hephaestus/opensta_timing.py \
             tests/test_opensta_binding.py \
-            scripts/opensta_sdc_probe.py \
-            scripts/opensta_sdc_probe_base.py
-          pytest tests/test_opensta_binding.py
+            tests/test_opensta_timing.py
+          pytest \
+            tests/test_opensta_binding.py \
+            tests/test_opensta_timing.py
+          python -m hephaestus.opensta_timing --help
       - name: Fetch and verify the pinned IHP Liberty
         run: |
           python - <<'PY'
@@ -121,7 +123,7 @@ jobs:
             --timeout 300
       - name: Prepare and run matched OpenSTA analyses
         run: |
-          python scripts/opensta_sdc_probe.py prepare \
+          python -m hephaestus.opensta_timing prepare \
             build/opensta-evidence/area-delay \
             --out build/opensta-evidence/timing \
             --period-ns 4.0 \
@@ -130,7 +132,7 @@ jobs:
             --driving-cell sg13g2_buf_4 \
             --output-load-pf 0.01 \
             --labels unconstrained d4000ps
-          python scripts/opensta_sdc_probe.py run \
+          python -m hephaestus.opensta_timing run \
             build/opensta-evidence/timing \
             --sta build/opensta-evidence/tooling/opensta.bin \
             --tool-metadata build/opensta-evidence/tooling/tool.json \
