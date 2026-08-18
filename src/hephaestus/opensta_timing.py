@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Prepare, run, and normalize the temporary OpenSTA SDC research probe."""
+"""Prepare, run, and normalize pinned OpenSTA pre-layout timing evidence."""
 
 from __future__ import annotations
 
@@ -20,15 +19,15 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 
-class ProbeError(RuntimeError):
-    """Raised when the research probe cannot produce trustworthy evidence."""
+class OpenSTATimingError(RuntimeError):
+    """Raised when OpenSTA timing evidence cannot be produced safely."""
 
 
 def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ProbeError(f"cannot read JSON file {path}: {exc}") from exc
+        raise OpenSTATimingError(f"cannot read JSON file {path}: {exc}") from exc
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -46,28 +45,28 @@ def _sha256(path: Path) -> str:
 
 def _resolve_artifact(root: Path, entry: Any, *, context: str) -> Path:
     if not isinstance(entry, dict):
-        raise ProbeError(f"{context} must be an artifact object")
+        raise OpenSTATimingError(f"{context} must be an artifact object")
     raw_path = entry.get("path")
     expected_digest = entry.get("sha256")
     if not isinstance(raw_path, str) or not raw_path:
-        raise ProbeError(f"{context}.path must be a non-empty string")
+        raise OpenSTATimingError(f"{context}.path must be a non-empty string")
     if not isinstance(expected_digest, str) or _SHA256_RE.fullmatch(expected_digest) is None:
-        raise ProbeError(f"{context}.sha256 must be a lowercase SHA-256 digest")
+        raise OpenSTATimingError(f"{context}.sha256 must be a lowercase SHA-256 digest")
 
     relative = Path(raw_path)
     if relative.is_absolute():
-        raise ProbeError(f"{context}.path must be relative")
+        raise OpenSTATimingError(f"{context}.path must be relative")
     resolved_root = root.resolve()
     resolved = (resolved_root / relative).resolve()
     try:
         resolved.relative_to(resolved_root)
     except ValueError as exc:
-        raise ProbeError(f"{context}.path escapes the evidence bundle") from exc
+        raise OpenSTATimingError(f"{context}.path escapes the evidence bundle") from exc
     if not resolved.is_file():
-        raise ProbeError(f"{context} does not exist: {resolved}")
+        raise OpenSTATimingError(f"{context} does not exist: {resolved}")
     actual_digest = _sha256(resolved)
     if actual_digest != expected_digest:
-        raise ProbeError(
+        raise OpenSTATimingError(
             f"{context} digest mismatch: expected {expected_digest}, got {actual_digest}"
         )
     return resolved
@@ -75,16 +74,16 @@ def _resolve_artifact(root: Path, entry: Any, *, context: str) -> Path:
 
 def _safe_module(value: Any, *, context: str) -> str:
     if not isinstance(value, str) or _MODULE_RE.fullmatch(value) is None:
-        raise ProbeError(f"{context} is not a safe Verilog module name: {value!r}")
+        raise OpenSTATimingError(f"{context} is not a safe Verilog module name: {value!r}")
     return value
 
 
 def _positive_number(value: Any, *, context: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ProbeError(f"{context} must be numeric")
+        raise OpenSTATimingError(f"{context} must be numeric")
     number = float(value)
     if not math.isfinite(number) or number <= 0:
-        raise ProbeError(f"{context} must be finite and positive")
+        raise OpenSTATimingError(f"{context} must be finite and positive")
     return number
 
 
@@ -140,7 +139,7 @@ def _analysis_script(
     )
 
 
-def prepare_probe(
+def prepare_timing_evidence(
     area_delay_bundle: Path,
     output_dir: Path,
     *,
@@ -170,9 +169,9 @@ def prepare_probe(
     manifest_path = bundle / "abc_area_delay_evidence.json"
     manifest = _load_json(manifest_path)
     if manifest.get("schema") != "hephaestus.abc-area-delay-evidence.v1":
-        raise ProbeError("unsupported ABC area-delay evidence schema")
+        raise OpenSTATimingError("unsupported ABC area-delay evidence schema")
     if manifest.get("evidence_level") != "abc_liberty_area_delay_estimate":
-        raise ProbeError("unsupported ABC area-delay evidence level")
+        raise OpenSTATimingError("unsupported ABC area-delay evidence level")
 
     claims = manifest.get("claims")
     required_claims = (
@@ -187,17 +186,17 @@ def prepare_probe(
     if not isinstance(claims, dict) or any(
         claims.get(name) is not True for name in required_claims
     ):
-        raise ProbeError("ABC area-delay source evidence is not fully verified")
+        raise OpenSTATimingError("ABC area-delay source evidence is not fully verified")
 
     contract = manifest.get("contract")
     if not isinstance(contract, dict):
-        raise ProbeError("ABC area-delay contract is malformed")
+        raise OpenSTATimingError("ABC area-delay contract is malformed")
     if contract.get("combinational") is not True or contract.get("latency_cycles") != 0:
-        raise ProbeError("OpenSTA probe currently requires a zero-cycle combinational contract")
+        raise OpenSTATimingError("OpenSTA timing requires a zero-cycle combinational contract")
 
     technology = manifest.get("technology")
     if not isinstance(technology, dict):
-        raise ProbeError("ABC area-delay technology metadata is malformed")
+        raise OpenSTATimingError("ABC area-delay technology metadata is malformed")
     liberty = _resolve_artifact(
         bundle,
         technology.get("liberty_artifact"),
@@ -209,7 +208,7 @@ def prepare_probe(
 
     backends = manifest.get("backends")
     if not isinstance(backends, dict) or set(backends) != set(BACKENDS):
-        raise ProbeError("ABC area-delay backend set is not the expected matched set")
+        raise OpenSTATimingError("ABC area-delay backend set is not the expected matched set")
 
     analyses_root = output / "analyses"
     analyses_root.mkdir(parents=True, exist_ok=True)
@@ -219,25 +218,25 @@ def prepare_probe(
     for backend_name in BACKENDS:
         backend = backends[backend_name]
         if not isinstance(backend, dict):
-            raise ProbeError(f"backend {backend_name!r} is malformed")
+            raise OpenSTATimingError(f"backend {backend_name!r} is malformed")
         module = _safe_module(backend.get("module"), context=f"{backend_name}.module")
         runs = backend.get("runs")
         if not isinstance(runs, dict):
-            raise ProbeError(f"backend {backend_name!r} has no runs")
+            raise OpenSTATimingError(f"backend {backend_name!r} has no runs")
 
         for label in labels:
             run = runs.get(label)
             if not isinstance(run, dict):
-                raise ProbeError(f"backend {backend_name!r} has no run {label!r}")
+                raise OpenSTATimingError(f"backend {backend_name!r} has no run {label!r}")
             if run.get("area_cross_check_passed") is not True:
-                raise ProbeError(f"run {backend_name}/{label} failed its area cross-check")
+                raise OpenSTATimingError(f"run {backend_name}/{label} failed its area cross-check")
             repeatability = run.get("repeatability")
             if (
                 not isinstance(repeatability, dict)
                 or repeatability.get("performed") is not True
                 or repeatability.get("passed") is not True
             ):
-                raise ProbeError(f"run {backend_name}/{label} is not repeatable")
+                raise OpenSTATimingError(f"run {backend_name}/{label} is not repeatable")
             source = _resolve_artifact(
                 bundle,
                 run.get("artifacts", {}).get("mapped_verilog")
@@ -247,7 +246,7 @@ def prepare_probe(
             )
             digest = _sha256(source)
             if digest in mapped_digests:
-                raise ProbeError(
+                raise OpenSTATimingError(
                     f"selected run {backend_name}/{label} duplicates another mapped netlist"
                 )
             mapped_digests.add(digest)
@@ -299,7 +298,9 @@ def prepare_probe(
 
     expected_count = len(BACKENDS) * len(labels)
     if len(index) != expected_count or len(mapped_digests) != expected_count:
-        raise ProbeError("selected OpenSTA analyses are not one-to-one with mapped netlists")
+        raise OpenSTATimingError(
+            "selected OpenSTA analyses are not one-to-one with mapped netlists"
+        )
 
     prepared = {
         "schema": "hephaestus.opensta-sdc-prepared.v1",
@@ -326,10 +327,10 @@ def prepare_probe(
 def _parse_single(pattern: str, text: str, *, context: str) -> float:
     matches = re.findall(pattern, text, re.MULTILINE)
     if len(matches) != 1:
-        raise ProbeError(f"{context}: expected one timing value, found {matches}")
+        raise OpenSTATimingError(f"{context}: expected one timing value, found {matches}")
     value = float(matches[0])
     if not math.isfinite(value):
-        raise ProbeError(f"{context}: timing value is not finite")
+        raise OpenSTATimingError(f"{context}: timing value is not finite")
     return value
 
 
@@ -352,18 +353,18 @@ def _run_once(
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ProbeError(f"OpenSTA timed out in {run_dir.name}") from exc
+        raise OpenSTATimingError(f"OpenSTA timed out in {run_dir.name}") from exc
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
     combined = completed.stdout + "\n" + completed.stderr
     if completed.returncode != 0:
-        raise ProbeError(
+        raise OpenSTATimingError(
             f"OpenSTA failed for {run_dir.name}; inspect {stdout_path.name} and {stderr_path.name}"
         )
     if "HEPHAESTUS_ERROR" in combined:
-        raise ProbeError(f"OpenSTA setup failed for {run_dir.name}")
+        raise OpenSTATimingError(f"OpenSTA setup failed for {run_dir.name}")
     if "Startpoint:" not in combined or "Endpoint:" not in combined:
-        raise ProbeError(f"OpenSTA did not report a detailed path for {run_dir.name}")
+        raise OpenSTATimingError(f"OpenSTA did not report a detailed path for {run_dir.name}")
 
     period_ns = _parse_single(
         r"^HEPHAESTUS_PERIOD_NS\s+([-+0-9.eE]+)\s*$",
@@ -382,7 +383,7 @@ def _run_once(
     )
     data_delay_ns = period_ns - worst_slack_ns
     if data_delay_ns <= 0:
-        raise ProbeError(f"OpenSTA reported a non-positive data delay for {run_dir.name}")
+        raise OpenSTATimingError(f"OpenSTA reported a non-positive data delay for {run_dir.name}")
 
     return {
         "returncode": completed.returncode,
@@ -397,7 +398,22 @@ def _run_once(
     }
 
 
-def run_probe(
+_COMPARISON_FIELDS = (
+    "returncode",
+    "period_ns",
+    "worst_slack_ns",
+    "total_negative_slack_ns",
+    "derived_data_delay_ns",
+    "stdout_sha256",
+    "stderr_sha256",
+)
+
+
+def _signature(result: dict[str, Any]) -> dict[str, Any]:
+    return {field: result[field] for field in _COMPARISON_FIELDS}
+
+
+def run_timing_evidence(
     prepared_dir: Path,
     sta_path: Path,
     tool_metadata_path: Path,
@@ -405,7 +421,7 @@ def run_probe(
     attempts: int,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    """Run OpenSTA repeatedly and normalize its SDC timing evidence."""
+    """Run OpenSTA and compare report contents rather than attempt filenames."""
 
     if attempts < 2:
         raise ValueError("attempts must be at least two")
@@ -415,39 +431,38 @@ def run_probe(
     root = prepared_dir.resolve()
     sta = sta_path.resolve()
     if not sta.is_file() or not sta.stat().st_mode & 0o111:
-        raise ProbeError(f"OpenSTA binary is missing or not executable: {sta}")
+        raise OpenSTATimingError(f"OpenSTA binary is missing or not executable: {sta}")
     tool_metadata = _load_json(tool_metadata_path.resolve())
     if not isinstance(tool_metadata, dict):
-        raise ProbeError("tool metadata must be a JSON object")
-    expected_binary_digest = tool_metadata.get("binary_sha256")
-    if expected_binary_digest != _sha256(sta):
-        raise ProbeError("OpenSTA binary digest differs from tool metadata")
+        raise OpenSTATimingError("tool metadata must be a JSON object")
+    if tool_metadata.get("binary_sha256") != _sha256(sta):
+        raise OpenSTATimingError("OpenSTA binary digest differs from tool metadata")
 
     prepared = _load_json(root / "prepared.json")
     if (
         not isinstance(prepared, dict)
         or prepared.get("schema") != "hephaestus.opensta-sdc-prepared.v1"
     ):
-        raise ProbeError("prepared OpenSTA manifest is missing or unsupported")
+        raise OpenSTATimingError("prepared OpenSTA manifest is missing or unsupported")
     analyses = prepared.get("analyses")
     if not isinstance(analyses, list) or not analyses:
-        raise ProbeError("prepared OpenSTA manifest contains no analyses")
+        raise OpenSTATimingError("prepared OpenSTA manifest contains no analyses")
 
     normalized: list[dict[str, Any]] = []
     for item in analyses:
         if not isinstance(item, dict) or not isinstance(item.get("directory"), str):
-            raise ProbeError("prepared OpenSTA analysis entry is malformed")
+            raise OpenSTATimingError("prepared OpenSTA analysis entry is malformed")
         relative = Path(item["directory"])
         if relative.is_absolute():
-            raise ProbeError("prepared OpenSTA analysis path must be relative")
+            raise OpenSTATimingError("prepared OpenSTA analysis path must be relative")
         run_dir = (root / relative).resolve()
         try:
             run_dir.relative_to(root)
         except ValueError as exc:
-            raise ProbeError("prepared OpenSTA analysis path escapes its root") from exc
+            raise OpenSTATimingError("prepared OpenSTA analysis path escapes its root") from exc
         metadata = _load_json(run_dir / "metadata.json")
         if not isinstance(metadata, dict):
-            raise ProbeError(f"metadata is malformed for {run_dir.name}")
+            raise OpenSTATimingError(f"metadata is malformed for {run_dir.name}")
 
         attempt_results = [
             _run_once(
@@ -458,13 +473,23 @@ def run_probe(
             )
             for attempt in range(1, attempts + 1)
         ]
-        first = attempt_results[0]
-        if any(result != first for result in attempt_results[1:]):
-            raise ProbeError(f"OpenSTA output is not byte-identical for {run_dir.name}")
+        first_signature = _signature(attempt_results[0])
+        if any(_signature(result) != first_signature for result in attempt_results[1:]):
+            raise OpenSTATimingError(
+                f"OpenSTA report content is not byte-identical for {run_dir.name}"
+            )
+
         normalized.append(
             {
                 **metadata,
-                "timing": first,
+                "timing": first_signature,
+                "attempt_artifacts": [
+                    {
+                        "stdout": result["stdout"],
+                        "stderr": result["stderr"],
+                    }
+                    for result in attempt_results
+                ],
                 "attempts": attempts,
                 "repeatability_passed": True,
             }
@@ -472,7 +497,7 @@ def run_probe(
 
     mapped_digests = {result["mapped_verilog_sha256"] for result in normalized}
     if len(mapped_digests) != len(normalized):
-        raise ProbeError("normalized OpenSTA results do not cover distinct mapped netlists")
+        raise OpenSTATimingError("normalized OpenSTA results do not cover distinct mapped netlists")
 
     summary = {
         "schema": "hephaestus.opensta-sdc-probe.v1",
@@ -530,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
         if arguments.command == "prepare":
-            result = prepare_probe(
+            result = prepare_timing_evidence(
                 arguments.area_delay_bundle,
                 arguments.out,
                 period_ns=arguments.period_ns,
@@ -542,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"prepared {len(result['analyses'])} OpenSTA analyses")
         else:
-            result = run_probe(
+            result = run_timing_evidence(
                 arguments.prepared_dir,
                 arguments.sta,
                 arguments.tool_metadata,
@@ -550,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=arguments.timeout,
             )
             print(f"verified {len(result['results'])} repeatable OpenSTA timing analyses")
-    except (ProbeError, OSError, subprocess.SubprocessError, ValueError) as exc:
+    except (OpenSTATimingError, OSError, subprocess.SubprocessError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0
