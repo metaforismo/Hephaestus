@@ -1,0 +1,192 @@
+       "(y_constant_multipliers !== expected_y)) begin"
+            ),
+            '          $display("FAIL expected=%h shared=%h naive=%h mult=%h",',
+            "                   expected_y, y_shared_dag, y_naive_shift_add,",
+            "                   y_constant_multipliers);",
+            "          $fatal(1);",
+            "        end",
+            "        checked_vectors = checked_vectors + 1;",
+            "      end",
+            "    end",
+            "  endtask",
+            "",
+            "  initial begin",
+            "    clk = 1'b0;",
+            "    reset = 1'b1;",
+            "    valid_in = 1'b0;",
+            "    x_flat = {INPUT_BITS{1'b0}};",
+            "    expected_valid = 1'b0;",
+            "    expected_y = {OUTPUT_BITS{1'b0}};",
+            "    checked_vectors = 0;",
+        ]
+    )
+    for index, item in enumerate(schedule):
+        valid = "1'b1" if item["valid"] else "1'b0"
+        packed_input = int(item["input"])
+        packed_output = int(item["output"])
+        lines.extend(
+            [
+                f"    schedule_valid[{index}] = {valid};",
+                (
+                    f"    schedule_input[{index}] = "
+                    f"{input_bits}'h{packed_input:0{input_hex_digits}x};"
+                ),
+                (
+                    f"    schedule_output[{index}] = "
+                    f"{output_bits}'h{packed_output:0{output_hex_digits}x};"
+                ),
+            ]
+        )
+    lines.extend(
+        [
+            "    repeat (2) begin",
+            "      @(posedge clk);",
+            "      check_outputs;",
+            "    end",
+            "    @(negedge clk);",
+            "    reset = 1'b0;",
+            "    for (schedule_index = 0; schedule_index < SCHEDULE_COUNT;",
+            "         schedule_index = schedule_index + 1) begin",
+            "      valid_in = schedule_valid[schedule_index];",
+            "      x_flat = schedule_input[schedule_index];",
+            "      @(posedge clk);",
+            "      check_outputs;",
+            "      expected_valid = schedule_valid[schedule_index];",
+            "      expected_y = schedule_output[schedule_index];",
+            "      @(negedge clk);",
+            "    end",
+            "    valid_in = 1'b0;",
+            "    x_flat = {INPUT_BITS{1'b0}};",
+            "    @(posedge clk);",
+            "    check_outputs;",
+            "    expected_valid = 1'b0;",
+            "    expected_y = {OUTPUT_BITS{1'b0}};",
+            "    @(negedge clk);",
+            "    @(posedge clk);",
+            "    check_outputs;",
+            "    if (checked_vectors != VALID_VECTOR_COUNT) begin",
+            (
+                '      $display("FAIL checked=%0d expected=%0d", '
+                "checked_vectors, VALID_VECTOR_COUNT);"
+            ),
+            "      $fatal(1);",
+            "    end",
+            '    $display("PASS registered matched tiles vectors=%0d", checked_vectors);',
+            "    $finish;",
+            "  end",
+            "endmodule",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _tool_version(executable: str) -> str:
+    completed = subprocess.run(
+        [executable, "-V"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    output = (completed.stdout + completed.stderr).strip()
+    return output.splitlines()[0] if output else "unknown"
+
+
+def _run_simulation(
+    *,
+    output_dir: Path,
+    sources: list[Path],
+    testbench_module: str,
+    label: str,
+    expect_failure: bool,
+) -> dict[str, Any]:
+    iverilog = shutil.which("iverilog")
+    vvp = shutil.which("vvp")
+    if iverilog is None or vvp is None:
+        raise RegisteredTileError("--simulate requires both iverilog and vvp on PATH")
+    executable = output_dir / f"{label}.vvp"
+    compile_result = subprocess.run(
+        [
+            iverilog,
+            "-g2012",
+            "-s",
+            testbench_module,
+            "-o",
+            str(executable),
+            *[str(path) for path in sources],
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    compile_stdout = output_dir / f"{label}.iverilog.stdout.txt"
+    compile_stderr = output_dir / f"{label}.iverilog.stderr.txt"
+    compile_stdout.write_text(compile_result.stdout, encoding="utf-8")
+    compile_stderr.write_text(compile_result.stderr, encoding="utf-8")
+    if compile_result.returncode != 0:
+        raise RegisteredTileError(
+            f"Icarus compilation failed for {label}; inspect {compile_stderr.name}"
+        )
+    simulation = subprocess.run(
+        [vvp, str(executable)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    simulation_stdout = output_dir / f"{label}.simulation.stdout.txt"
+    simulation_stderr = output_dir / f"{label}.simulation.stderr.txt"
+    simulation_stdout.write_text(simulation.stdout, encoding="utf-8")
+    simulation_stderr.write_text(simulation.stderr, encoding="utf-8")
+    positive_marker = "PASS registered matched tiles" in simulation.stdout
+    negative_marker = "FAIL expected=" in simulation.stdout
+    if expect_failure:
+        passed = simulation.returncode != 0 and negative_marker and not positive_marker
+    else:
+        passed = simulation.returncode == 0 and positive_marker and not negative_marker
+    if not passed:
+        expectation = "fault detection" if expect_failure else "a passing comparison"
+        raise RegisteredTileError(
+            f"registered-tile simulation did not produce {expectation} for {label}"
+        )
+    return {
+        "performed": True,
+        "passed": True,
+        "expected_failure": expect_failure,
+        "returncode": simulation.returncode,
+        "iverilog_version": _tool_version(iverilog),
+        "vvp_version": _tool_version(vvp),
+        "compile_stdout": compile_stdout.name,
+        "compile_stderr": compile_stderr.name,
+        "simulation_stdout": simulation_stdout.name,
+        "simulation_stderr": simulation_stderr.name,
+    }
+
+
+def build_registered_tiles(
+    matched_bundle: Path,
+    codes_path: Path,
+    formal_evidence_path: Path,
+    output_dir: Path,
+    *,
+    module_name: str = "hephaestus_registered",
+    random_vectors: int = 256,
+    seed: int = 0,
+    simulate: bool = False,
+) -> dict[str, Any]:
+    """Build identical registered boundaries around three exhaustively proved cores."""
+
+    if random_vectors < 0:
+        raise ValueError("random_vectors must be non-negative")
+    bundle = matched_bundle.resolve()
+    source_codes = codes_path.resolve()
+    source_formal = formal_evidence_path.resolve()
+    output = output_dir.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = bundle / "matched_manifest.json"
+    if not manifest_path.is_file():
+        raise RegisteredTileError("matched bundle is missing matched_manifest.json")
+    matched = _load_json(manifest_path)
+    if matched.get("schema") != "hephaestus.matched-baselines.v1":
+        raise Re
