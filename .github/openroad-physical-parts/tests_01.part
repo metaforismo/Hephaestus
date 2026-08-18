@@ -1,0 +1,175 @@
+
+
+def _prepared_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+    config = _config()
+    config_path = tmp_path / "physical_config.json"
+    _write_json(config_path, config)
+    bundle = _registered_bundle(tmp_path)
+    prepared = tmp_path / "prepared"
+    prepare_openroad_designs(bundle, config_path, prepared)
+    return prepared, config_path, config
+
+
+def _stage_runs(
+    tmp_path: Path,
+    prepared: Path,
+    config: dict[str, object],
+    *,
+    drift_backend: str | None = None,
+) -> tuple[Path, Path]:
+    runs = tmp_path / "runs"
+    prepared_manifest = prepared / "openroad_prepared.json"
+    prepared_payload = json.loads(prepared_manifest.read_text(encoding="utf-8"))
+    for backend_index, backend in enumerate(BACKENDS, start=1):
+        design = prepared_payload["designs"][backend]
+        for attempt in (1, 2):
+            run = runs / backend / f"attempt_{attempt}"
+            final = run / "final"
+            reports = run / "reports"
+            final.mkdir(parents=True)
+            reports.mkdir()
+            geometry = backend_index
+            if drift_backend == backend and attempt == 2:
+                geometry += 10
+            files = {
+                "final_gds": final / "6_final.gds",
+                "final_def": final / "6_final.def",
+                "final_verilog": final / "6_final.v",
+                "final_open_db": final / "6_final.odb",
+                "final_spef": final / "6_final.spef",
+            }
+            files["final_gds"].write_bytes(_gds(100 + attempt, geometry))
+            files["final_def"].write_text(
+                f"VERSION 5.8 ;\n# DATE attempt {attempt}\nDESIGN {backend} ;\nEND DESIGN\n",
+                encoding="utf-8",
+            )
+            files["final_verilog"].write_text(
+                f"module physical_{backend}; endmodule\n",
+                encoding="utf-8",
+            )
+            files["final_open_db"].write_bytes(
+                f"odb-{backend}-attempt-{attempt}".encode()
+            )
+            files["final_spef"].write_text(
+                f'*SPEF "IEEE 1481-1998"\n*DATE "attempt {attempt}"\n'
+                f"*DESIGN {backend}\n*D_NET net 0.{backend_index}\n",
+                encoding="utf-8",
+            )
+            metadata = reports / "metadata.json"
+            _write_json(metadata, {"backend": backend, "attempt": attempt})
+            artifact_specs = {
+                label: {
+                    "path": path.relative_to(run).as_posix(),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+                for label, path in files.items()
+            }
+            toolchain = config["toolchain"]
+            _write_json(
+                run / "run.json",
+                {
+                    "schema": "hephaestus.openroad-physical-run.v1",
+                    "backend": backend,
+                    "attempt": attempt,
+                    "completed": True,
+                    "returncode": 0,
+                    "platform": config["platform"],
+                    "wrapper_module": design["wrapper_module"],
+                    "design_nickname": design["nickname"],
+                    "flow_variant": design["flow_variant"],
+                    "prepared_manifest_sha256": sha256_file(prepared_manifest),
+                    "toolchain": toolchain,
+                    "artifacts": artifact_specs,
+                    "metadata": {
+                        "path": metadata.relative_to(run).as_posix(),
+                        "sha256": sha256_file(metadata),
+                    },
+                },
+            )
+    control = tmp_path / "negative_control.json"
+    original = runs / "shared_dag" / "attempt_1" / "final" / "6_final.gds"
+    mutated = tmp_path / "mutated.gds"
+    payload = bytearray(original.read_bytes())
+    payload[-10] ^= 1
+    mutated.write_bytes(payload)
+    _write_json(
+        control,
+        {
+            "schema": "hephaestus.openroad-physical-negative-control.v1",
+            "prepared_manifest_sha256": sha256_file(prepared_manifest),
+            "backend": "shared_dag",
+            "attempt": 1,
+            "mutation": "flip_one_byte_in_final_gds",
+            "original_sha256": sha256_file(original),
+            "mutated_sha256": sha256_file(mutated),
+            "detected": True,
+            "rejected_error": "digest mismatch after one-byte GDS mutation",
+        },
+    )
+    return runs, control
+
+
+def test_config_requires_an_immutable_container(tmp_path: Path) -> None:
+    config = _config()
+    config["toolchain"]["docker_image"] = "openroad/orfs:latest"
+    config["toolchain"]["docker_repo_digest"] = "openroad/orfs:latest"
+    path = tmp_path / "config.json"
+    _write_json(path, config)
+
+    with pytest.raises(OpenROADPhysicalError, match="immutable sha256"):
+        load_physical_config(path)
+
+
+def test_config_rejects_core_outside_die(tmp_path: Path) -> None:
+    config = _config()
+    config["floorplan"]["core_area_um"] = [0.0, 20.0, 230.0, 230.0]
+    path = tmp_path / "config.json"
+    _write_json(path, config)
+
+    with pytest.raises(OpenROADPhysicalError, match="strictly inside"):
+        load_physical_config(path)
+
+
+def test_sdc_and_makefile_share_one_contract() -> None:
+    config = _config()
+
+    sdc = emit_sdc(config)
+    makefile = emit_config_mk(
+        config,
+        wrapper_module="registered_tile",
+        nickname="registered_shared",
+    )
+
+    assert "create_clock -name core_clock -period 4 [get_ports clk]" in sdc
+    assert "set_clock_uncertainty 0.05" in sdc
+    assert "set_driving_cell -lib_cell sg13g2_buf_4" in sdc
+    assert "set_load 0.01 [all_outputs]" in sdc
+    assert "export PLATFORM = ihp-sg13g2" in makefile
+    assert "export DIE_AREA = 0 0 250 250" in makefile
+    assert "export CORE_AREA = 20 20 230 230" in makefile
+    assert "export PLACE_DENSITY = 0.35" in makefile
+
+
+def test_gds_signature_ignores_timestamps_but_not_geometry(tmp_path: Path) -> None:
+    first = tmp_path / "first.gds"
+    second = tmp_path / "second.gds"
+    changed = tmp_path / "changed.gds"
+    first.write_bytes(_gds(10, 1))
+    second.write_bytes(_gds(20, 1))
+    changed.write_bytes(_gds(20, 2))
+
+    assert canonical_gds_sha256(first) == canonical_gds_sha256(second)
+    assert canonical_gds_sha256(first) != canonical_gds_sha256(changed)
+
+
+def test_spef_signature_ignores_only_the_generation_date(tmp_path: Path) -> None:
+    first = tmp_path / "first.spef"
+    second = tmp_path / "second.spef"
+    changed = tmp_path / "changed.spef"
+    first.write_text('*DATE "one"\n*D_NET n 0.1\n', encoding="utf-8")
+    second.write_text('*DATE "two"\n*D_NET n 0.1\n', encoding="utf-8")
+    changed.write_text('*DATE "two"\n*D_NET n 0.2\n', encoding="utf-8")
+
+    assert normalized_spef_sha256(first) == normalized_spef_sha256(second)
+    assert normalized_spef_sha256(first) != normalized_spef_sha256(changed)
