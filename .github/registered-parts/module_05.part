@@ -1,0 +1,181 @@
+   }
+                for item in schedule
+            ],
+        },
+    )
+    artifacts["verification_oracle"] = oracle_path
+
+    positive_tb_module = f"{base}_registered_tb"
+    positive_tb_path = output / "registered_testbench.sv"
+    positive_tb_path.write_text(
+        emit_registered_testbench(
+            backend_modules={
+                backend: backend_manifest[backend]["wrapper_module"]
+                for backend in _BACKENDS
+            },
+            schedule=schedule,
+            input_bits=input_bits,
+            output_bits=output_bits,
+            valid_vector_count=len(vectors),
+            module_name=positive_tb_module,
+        ),
+        encoding="utf-8",
+    )
+    artifacts["testbench"] = positive_tb_path
+
+    negative_wrapper_module = f"{base}_negative_control_registered"
+    negative_wrapper_path = output / "negative_control_registered.sv"
+    negative_wrapper_path.write_text(
+        emit_registered_wrapper(
+            core_module=backend_manifest["shared_dag"]["core_module"],
+            module_name=negative_wrapper_module,
+            input_bits=input_bits,
+            output_bits=output_bits,
+            inject_fault=True,
+        ),
+        encoding="utf-8",
+    )
+    negative_tb_module = f"{base}_negative_control_tb"
+    negative_tb_path = output / "negative_control_testbench.sv"
+    negative_tb_path.write_text(
+        emit_registered_testbench(
+            backend_modules={
+                "shared_dag": negative_wrapper_module,
+                "naive_shift_add": backend_manifest["naive_shift_add"]["wrapper_module"],
+                "constant_multipliers": backend_manifest["constant_multipliers"][
+                    "wrapper_module"
+                ],
+            },
+            schedule=schedule,
+            input_bits=input_bits,
+            output_bits=output_bits,
+            valid_vector_count=len(vectors),
+            module_name=negative_tb_module,
+        ),
+        encoding="utf-8",
+    )
+    artifacts["negative_control_wrapper"] = negative_wrapper_path
+    artifacts["negative_control_testbench"] = negative_tb_path
+
+    simulation: dict[str, Any] = {
+        "performed": False,
+        "passed": False,
+        "negative_control_performed": False,
+        "negative_control_detected": False,
+    }
+    if simulate:
+        positive = _run_simulation(
+            output_dir=output,
+            sources=[*simulation_sources, positive_tb_path],
+            testbench_module=positive_tb_module,
+            label="positive",
+            expect_failure=False,
+        )
+        negative = _run_simulation(
+            output_dir=output,
+            sources=[
+                *simulation_sources,
+                negative_wrapper_path,
+                negative_tb_path,
+            ],
+            testbench_module=negative_tb_module,
+            label="negative_control",
+            expect_failure=True,
+        )
+        simulation = {
+            "performed": True,
+            "passed": True,
+            "positive": positive,
+            "negative_control_performed": True,
+            "negative_control_detected": True,
+            "negative_control": negative,
+        }
+        for path in output.glob("positive.*.txt"):
+            artifacts[path.name] = path
+        for path in output.glob("negative_control.*.txt"):
+            artifacts[path.name] = path
+
+    manifest = {
+        "schema": "hephaestus.registered-matched-tiles.v1",
+        "evidence_level": "registered_streaming_tiles_bound_to_formally_proved_cores",
+        "source": {
+            "matched_manifest": preserved_manifest.name,
+            "matched_manifest_sha256": sha256_file(preserved_manifest),
+            "codes": preserved_codes.name,
+            "codes_sha256": sha256_file(preserved_codes),
+            "formal_evidence": preserved_formal.name,
+            "formal_evidence_sha256": sha256_file(preserved_formal),
+        },
+        "contract": {
+            "domain": contract.get("domain"),
+            "input_count": input_count,
+            "output_count": output_count,
+            "input_width": input_width,
+            "accumulator_width": accumulator_width,
+            "input_bits": input_bits,
+            "output_bits": output_bits,
+            "latency_cycles": 1,
+            "valid_latency_cycles": 1,
+            "initiation_interval_cycles": 1,
+            "clock_edge": "rising",
+            "reset_style": "synchronous_active_high",
+            "reset_clears_pipeline": True,
+            "input_registered": True,
+            "output_registered": True,
+            "combinational_core_preserved": True,
+            "runtime_coefficient_reads_per_matvec": 0,
+        },
+        "backends": backend_manifest,
+        "reference": {
+            "module": reference_core_module,
+            "rtl": reference_core_path.name,
+            "sha256": sha256_file(reference_core_path),
+            "derived_directly_from_codes": True,
+            "uses_compilation_plan": False,
+        },
+        "verification": {
+            "method": "self_checking_oracle_driven_registered_streaming_simulation",
+            "testbench": positive_tb_path.name,
+            "negative_control_testbench": negative_tb_path.name,
+            "oracle": oracle_path.name,
+            "seed": seed,
+            "random_vectors_requested": random_vectors,
+            "valid_vectors_executed": len(vectors),
+            "schedule_cycles": len(schedule),
+            "bubble_cycles": len(schedule) - len(vectors),
+            "simulation": simulation,
+        },
+        "artifact_sha256": {label: sha256_file(path) for label, path in artifacts.items()},
+        "claims": {
+            "source_matched_integer_contract_verified": True,
+            "source_exhaustive_combinational_equivalence_verified": True,
+            "source_formal_negative_control_counterexample_found": True,
+            "registered_streaming_interface_generated": True,
+            "registered_backends_match_oracle_on_executed_schedule": bool(
+                simulation.get("passed")
+            ),
+            "one_cycle_latency_verified_on_executed_schedule": bool(
+                simulation.get("passed")
+            ),
+            "initiation_interval_one_verified_on_executed_schedule": bool(
+                simulation.get("passed")
+            ),
+            "reset_flush_verified_on_executed_schedule": bool(simulation.get("passed")),
+            "simulation_negative_control_detected": bool(
+                simulation.get("negative_control_detected")
+            ),
+            "sequential_formal_equivalence_verified": False,
+            "post_synthesis_ppa_measured": False,
+            "placement_performed": False,
+            "routing_performed": False,
+            "power_estimated": False,
+            "post_layout_pex_verified": False,
+            "silicon_verified": False,
+        },
+    }
+    write_json(output / "registered_manifest.json", manifest)
+    return manifest
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.Argum
