@@ -1,0 +1,78 @@
+{
+  "case": {
+    "bubble_cycles": 39,
+    "random_vectors_requested": 256,
+    "schedule_cycles": 311,
+    "seed": 59,
+    "source": "examples/tiny_weights.json",
+    "valid_vectors_executed": 272
+  },
+  "claim_boundary": {
+    "initiation_interval_one_verified_on_executed_schedule": true,
+    "one_cycle_latency_verified_on_executed_schedule": true,
+    "placement_performed": false,
+    "post_layout_pex_verified": false,
+    "post_synthesis_ppa_measured": false,
+    "power_estimated": false,
+    "registered_backends_match_oracle_on_executed_schedule": true,
+    "registered_streaming_interface_generated": true,
+    "reset_flush_verified_on_executed_schedule": true,
+    "routing_performed": false,
+    "sequential_formal_equivalence_verified": false,
+    "silicon_verified": false,
+    "simulation_negative_control_detected": true,
+    "source_exhaustive_combinational_equivalence_verified": true,
+    "source_formal_negative_control_counterexample_found": true,
+    "source_matched_integer_contract_verified": true
+  },
+  "contract": {
+    "accumulator_width": 12,
+    "clock_edge": "rising",
+    "combinational_core_preserved": true,
+    "domain": "quantized_integer_core_before_row_scaling",
+    "initiation_interval_cycles": 1,
+    "input_bits": 48,
+    "input_count": 6,
+    "input_registered": true,
+    "input_width": 8,
+    "latency_cycles": 1,
+    "output_bits": 48,
+    "output_count": 4,
+    "output_registered": true,
+    "reset_clears_pipeline": true,
+    "reset_style": "synchronous_active_high",
+    "runtime_coefficient_reads_per_matvec": 0,
+    "valid_latency_cycles": 1
+  },
+  "generated_artifacts": {
+    "negative_control_testbench_sha256": "d7d46cc6f849644b26e8d10785f03984572402f5d8f8988d5e972db8c2dfbce2",
+    "negative_control_wrapper_sha256": "c937a8d482513346fd269cb2e07a95ebbee079380f8afb246f640059ad8fc500",
+    "reference_core_sha256": "616f91c8eb6fe0e0bddf11dcf2d6f0aff84d0b9a65a8e7278713b638d890d2b0",
+    "testbench_sha256": "d8a942317095ab12e8eac5b0bc1cf456369c2c750c2e62d3aae462b688b08147",
+    "verification_oracle_sha256": "7bb5cf1c208f52c9db594d3266ebfc2911931a216066964b67eef2a902ff9b34",
+    "wrapper_sha256": {
+      "constant_multipliers": "8394d02789bbcf3bf5022052ae4dbfb19bfa03d7248dbec2d134b5269d613a4d",
+      "naive_shift_add": "ab725694e5c2ab4deca558d50593509600e7752c9495dcbaf50d6bda1427b6d6",
+      "shared_dag": "dede182145a2ed7e886ba7a78e914c136e808202f5e2633fe7f54942c4c47940"
+    }
+  },
+  "qualifying_run": {
+    "artifact_sha256": "2527c95a904598d10526b1740b1110db788ccf2fffeb7674e03eca0456834e8a",
+    "head_sha": "5a839915ad873c234f93b61030e438f683550360",
+    "workflow_run_id": 32168999063
+  },
+  "reference_id": "registered-matched-tiles-tiny-v1",
+  "schema": "hephaestus.registered-matched-tiles-reference.v1",
+  "source_artifacts": {
+    "codes_sha256": "73912aaccbab7dbce414956b4b614aa9fefa966401b353ad46f54349b53f0cbe",
+    "core_sha256": {
+      "constant_multipliers": "7788892809e2e602dedd0ebfb79289d15a4cdffeddab3cdb9a595943fcf46a61",
+      "naive_shift_add": "e7d55addbfe2827d4e4cc6e170afa7834905cf5158719d566eda55f03234fb35",
+      "shared_dag": "e23569c970e65984072d88ddbb5a8217f35f31b5c03e1aa13c3d70fb7c4d34ae"
+    }
+  },
+  "tool": {
+    "iverilog_version_prefix": "Icarus Verilog version 12.0",
+    "vvp_version_prefix": "Icarus Verilog runtime version 12.0"
+  }
+}
