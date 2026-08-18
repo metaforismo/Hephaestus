@@ -1,0 +1,124 @@
+name: One-shot Actions concurrency cleanup
+
+on:
+  push:
+    branches:
+      - chore/actions-concurrency
+
+permissions:
+  contents: write
+
+jobs:
+  update-workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/actions-concurrency
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bound every permanent workflow to its latest ref
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          workflows = Path('.github/workflows')
+          one_shot = workflows / 'one-shot-actions-concurrency.yml'
+          block = (
+              'concurrency:\n'
+              '  group: "${{ github.workflow }}-'
+              '${{ github.event.pull_request.number || github.ref }}"\n'
+              '  cancel-in-progress: true\n\n'
+          )
+          for path in sorted(workflows.glob('*.yml')):
+              if path == one_shot:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              text = re.sub(r'(?m)^      - feat/[^\n]+\n', '', text)
+              if 'concurrency:\n' not in text:
+                  marker = 'permissions:\n'
+                  if marker not in text:
+                      raise SystemExit(f'{path} has no permissions marker')
+                  text = text.replace(marker, block + marker, 1)
+              path.write_text(text, encoding='utf-8')
+
+          checker = Path('scripts/check_workflow_concurrency.py')
+          checker.write_text(
+              '''#!/usr/bin/env python3
+          """Require every permanent GitHub Actions workflow to cancel stale ref runs."""
+
+          from __future__ import annotations
+
+          import sys
+          from pathlib import Path
+
+          EXPECTED = (
+              'concurrency:\\n'
+              '  group: "${{ github.workflow }}-'
+              '${{ github.event.pull_request.number || github.ref }}"\\n'
+              '  cancel-in-progress: true\\n'
+          )
+
+
+          def violations(root: Path) -> list[str]:
+              failures: list[str] = []
+              for path in sorted((root / '.github/workflows').glob('*.yml')):
+                  text = path.read_text(encoding='utf-8')
+                  if EXPECTED not in text:
+                      failures.append(f'workflow lacks bounded concurrency: {path}')
+                  if '      - feat/' in text:
+                      failures.append(f'workflow retains a stale feature push branch: {path}')
+              return failures
+
+
+          def main() -> int:
+              failures = violations(Path.cwd())
+              if failures:
+                  print('Workflow concurrency check failed:', file=sys.stderr)
+                  for failure in failures:
+                      print(f'- {failure}', file=sys.stderr)
+                  return 1
+              print('Workflow concurrency check passed.')
+              return 0
+
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+          '''.replace('          ', ''),
+              encoding='utf-8',
+          )
+
+          hygiene = workflows / 'repository-hygiene.yml'
+          text = hygiene.read_text(encoding='utf-8')
+          step = (
+              '      - name: Require bounded workflow concurrency\n'
+              '        run: python scripts/check_workflow_concurrency.py\n'
+          )
+          marker = '      - name: Require a clean checkout\n'
+          if step not in text:
+              if marker not in text:
+                  raise SystemExit('repository hygiene workflow has no clean-checkout marker')
+              text = text.replace(marker, step + marker, 1)
+          hygiene.write_text(text, encoding='utf-8')
+          one_shot.unlink()
+          PY
+      - name: Verify the repository-wide policy
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check --fix scripts/check_workflow_concurrency.py
+          ruff format scripts/check_workflow_concurrency.py
+          ruff check scripts/check_workflow_concurrency.py
+          ruff format --check scripts/check_workflow_concurrency.py
+          python scripts/check_workflow_concurrency.py
+          python scripts/check_repo_hygiene.py
+      - name: Commit the workflow cleanup
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Cancel stale GitHub Actions runs per ref'
+          git push origin HEAD:chore/actions-concurrency
