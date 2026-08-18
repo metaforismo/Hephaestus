@@ -1,15 +1,16 @@
 name: One-shot Actions concurrency cleanup
 
 on:
-  push:
-    branches:
-      - chore/actions-concurrency
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   update-workflows:
+    if: >-
+      github.head_ref == 'chore/actions-concurrency' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
