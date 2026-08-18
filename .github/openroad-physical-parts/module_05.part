@@ -1,0 +1,120 @@
+
+
+def _write_summary(path: Path, manifest: dict[str, Any]) -> None:
+    lines = [
+        "# Matched registered OpenROAD physical evidence",
+        "",
+        "All three registered zero-fetch backends completed two IHP SG13G2 ORFS runs under one",
+        "pinned image and one common physical boundary. The table records preserved observations;",
+        "it is not yet a comparative PPA claim because post-physical equivalence is a later gate.",
+        "",
+        "| Backend | Components | Nets | GDS geometry digest | Repeatable |",
+        "|---|---:|---:|---|:---:|",
+    ]
+    for backend_name in _BACKENDS:
+        evidence = manifest["backends"][backend_name]
+        metrics = evidence["observed_def_metrics"]
+        lines.append(
+            "| "
+            f"`{backend_name}` | {metrics['component_count']} | {metrics['net_count']} | "
+            f"`{evidence['gds_timestamp_normalized_sha256']}` | "
+            f"{'yes' if evidence['repeatability']['passed'] else 'no'} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Claim boundary",
+            "",
+            "This bundle proves source binding, execution through placement and routing, physical",
+            "artifact generation, one common boundary, and the declared repeatability checks.",
+            "It does not prove post-physical functional equivalence, DRC, LVS, activity-based power,",
+            "validated PEX, foundry sign-off, or fabricated silicon. Comparative PPA is deliberately",
+            "disabled until the routed netlists receive downstream equivalence evidence.",
+            "",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Build digest-bound matched OpenROAD physical evidence."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    prepare = subparsers.add_parser("prepare")
+    prepare.add_argument("registered_bundle", type=Path)
+    prepare.add_argument("--registered-reference", type=Path, required=True)
+    prepare.add_argument("--probe-reference", type=Path, required=True)
+    prepare.add_argument("--contract", type=Path, required=True)
+    prepare.add_argument("--out", type=Path, required=True)
+
+    run = subparsers.add_parser("run")
+    run.add_argument("prepared", type=Path)
+    run.add_argument("--backend", choices=_BACKENDS, required=True)
+    run.add_argument("--attempt", type=int, required=True)
+    run.add_argument("--out", type=Path, required=True)
+    run.add_argument("--docker", default="docker")
+    run.add_argument("--timeout", type=int, default=7200)
+
+    bind = subparsers.add_parser("bind")
+    bind.add_argument("prepared", type=Path)
+    bind.add_argument("--runs", type=Path, required=True)
+    bind.add_argument("--out", type=Path, required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
+    try:
+        if arguments.command == "prepare":
+            manifest = prepare_physical_evidence(
+                arguments.registered_bundle,
+                arguments.registered_reference,
+                arguments.probe_reference,
+                arguments.contract,
+                arguments.out,
+            )
+            print(
+                "prepared matched OpenROAD sources: "
+                f"backends={len(manifest['backends'])} "
+                f"image={manifest['toolchain']['orfs_image_repo_digest']}"
+            )
+        elif arguments.command == "run":
+            manifest = run_physical_attempt(
+                arguments.prepared,
+                arguments.out,
+                backend_name=arguments.backend,
+                attempt=arguments.attempt,
+                docker=arguments.docker,
+                timeout_seconds=arguments.timeout,
+            )
+            print(
+                "completed ORFS physical run: "
+                f"backend={manifest['identity']['backend']} "
+                f"attempt={manifest['identity']['attempt']}"
+            )
+        else:
+            manifest = bind_physical_evidence(
+                arguments.prepared,
+                arguments.runs,
+                arguments.out,
+            )
+            print(
+                "bound matched OpenROAD evidence: "
+                f"backends={len(manifest['backends'])} "
+                f"repeatable={manifest['claims']['physical_repeatability_verified']}"
+            )
+    except (
+        OpenROADPhysicalError,
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
