@@ -1,0 +1,201 @@
+name: One-shot assemble registered OpenROAD physical evidence
+
+on:
+  push:
+    branches:
+      - feat/openroad-registered-physical-evidence
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-registered-physical-evidence
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Wait for and import the qualified research probe
+        run: |
+          set -euo pipefail
+          branch=research/openroad-registered-shared-probe
+          found=0
+          for _ in $(seq 1 180); do
+            git fetch --force origin "$branch:refs/remotes/origin/$branch"
+            if git show "refs/remotes/origin/$branch:research/openroad_registered_shared_probe_result.json" \
+              > /tmp/openroad_probe_result.json 2>/dev/null; then
+              found=1
+              break
+            fi
+            sleep 20
+          done
+          if [ "$found" -ne 1 ]; then
+            echo 'qualified OpenROAD research result did not appear' >&2
+            exit 1
+          fi
+          python -m json.tool /tmp/openroad_probe_result.json \
+            > /tmp/openroad_probe_result.pretty.json
+      - name: Assemble package, tests, workflows, config, and documentation
+        run: |
+          set -euo pipefail
+          mkdir -p src/hephaestus tests .github/workflows docs configs/physical
+          cat \
+            .github/openroad-physical-parts/module_00.part \
+            .github/openroad-physical-parts/module_01.part \
+            .github/openroad-physical-parts/module_02.part \
+            .github/openroad-physical-parts/module_03.part \
+            > src/hephaestus/openroad_physical.py
+          cat \
+            .github/openroad-physical-parts/tests_00.part \
+            .github/openroad-physical-parts/tests_01.part \
+            .github/openroad-physical-parts/tests_02.part \
+            > tests/test_openroad_physical.py
+          cp .github/openroad-physical-parts/workflow.yml.part \
+            .github/workflows/openroad-physical-evidence.yml
+          cp .github/openroad-physical-parts/qualifier.yml.part \
+            .github/workflows/qualify-openroad-physical-reference.yml
+          cp .github/openroad-physical-parts/docs.part \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md
+          python .github/openroad-physical-parts/generate_config.py.part
+          python .github/openroad-physical-parts/patch_workflow.py.part
+          python - <<'PY'
+          from pathlib import Path
+
+          qualifier = Path('.github/workflows/qualify-openroad-physical-reference.yml')
+          text = qualifier.read_text(encoding='utf-8')
+          text = text.replace("    if: github.actor != 'github-actions[bot]'\n", '', 1)
+          qualifier.write_text(text, encoding='utf-8')
+
+          flow = Path('flows/openroad/README.md')
+          flow.write_text(
+              '''# OpenROAD backend status
+
+The registered matched-tile boundary is now the only accepted source for the first physical flow.
+The production builder prepares and binds three out-of-tree IHP SG13G2 designs under one immutable
+clock, I/O, floorplan, placement-density, routing-layer, container, and output contract.
+
+```text
+registered matched evidence
+  → shared DAG / naive shift-add / constant multipliers
+  → two clean ORFS attempts per backend
+  → GDS / DEF / final Verilog / OpenDB / SPEF
+  → normalized GDS, DEF, and SPEF repeatability
+  → one-byte GDS digest-binding negative control
+```
+
+The implementation lives in `hephaestus.openroad_physical`; the permanent workflow is
+`.github/workflows/openroad-physical-evidence.yml`; and the complete methodology is documented in
+`docs/OPENROAD_PHYSICAL_EVIDENCE.md`.
+
+This level is matched open-source place-and-route evidence. It deliberately does not inherit or
+assert post-physical equivalence, independent DRC, LVS, activity-based power, validated PEX,
+foundry sign-off, or silicon behavior. Those are separate downstream gates.
+''',
+              encoding='utf-8',
+          )
+
+          roadmap = Path('docs/ROADMAP.md')
+          text = roadmap.read_text(encoding='utf-8')
+          old = '''## M4 — Open-PDK RTL-to-GDS
+
+- Consume the registered matched tile contract in a pinned IHP SG13G2 or other
+  production-accessible open-PDK backend.
+- Add clock constraints, physical I/O planning, utilization and floorplan contracts, reset handling,
+  scan/DFT planning, and eventually a pad-ring wrapper.
+- Automate matched Yosys/OpenROAD/KLayout runs for all three backends.
+- Preserve synthesis, placement, routing, congestion, STA, extraction, and switching-based power
+  reports with exact artifact provenance.
+- Add sequential, gate-level, and post-layout equivalence layers with independent negative controls.
+
+**Exit criterion:** reproducible DRC/LVS-clean GDS and post-layout evidence from a clean checkout.
+'''
+          new = '''## M4 — Open-PDK RTL-to-GDS — physical implementation layer in progress
+
+- **Implemented:** consume the exact registered matched-tile bundle and prepare three digest-bound
+  out-of-tree IHP SG13G2 designs.
+- **Implemented:** one common clock, I/O, floorplan, placement-density, and routing-layer contract
+  in an immutable ORFS container.
+- **Implemented:** two clean place-and-route attempts per backend with GDS, DEF, final Verilog,
+  OpenDB, SPEF, logs, metadata, normalized repeatability, and a GDS binding negative control.
+- **Next:** post-physical functional/sequential equivalence against the registered source.
+- **Next:** independent KLayout DRC, LVS, validated PEX, and activity-based power.
+- **Later:** scan/DFT planning and a pad-ring wrapper for a real MPW target.
+
+**Exit criterion:** reproducible independent DRC/LVS-clean GDS plus post-layout equivalence and
+extraction evidence from a clean checkout. Successful ORFS completion alone does not meet it.
+'''
+          if old not in text:
+              raise SystemExit('M4 roadmap block was not found')
+          roadmap.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          old = '''[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md),
+[Registered matched tiles](docs/REGISTERED_TILES.md),
+[Patent landscape](docs/IP_LANDSCAPE.md)'''
+          new = '''[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md),
+[Registered matched tiles](docs/REGISTERED_TILES.md),
+[Matched registered OpenROAD physical evidence](docs/OPENROAD_PHYSICAL_EVIDENCE.md),
+[Patent landscape](docs/IP_LANDSCAPE.md)'''
+          if old not in text:
+              raise SystemExit('README documentation-link marker was not found')
+          readme.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Remove all temporary assembly and research files
+        run: |
+          set -euo pipefail
+          rm -rf .github/openroad-physical-parts
+          rm .github/workflows/assemble-openroad-physical-evidence.yml
+          rm -f \
+            .github/workflows/research-openroad-registered-shared-probe.yml \
+            .github/workflows/research-openroad-registered-shared-collector.yml \
+            research/openroad_registered_shared_probe_result.json \
+            x
+      - name: Format, lint, and test the assembled implementation
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check --fix \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+          python -m hephaestus.openroad_physical --help
+          python - <<'PY'
+          from pathlib import Path
+          from hephaestus.openroad_physical import load_physical_config
+          config = load_physical_config(
+              Path('configs/physical/ihp_sg13g2_openroad_registered_v1.json')
+          )
+          assert config['toolchain']['docker_image'].startswith(
+              'openroad/orfs@sha256:'
+          )
+          PY
+          python scripts/check_workflow_concurrency.py
+          python scripts/check_repo_hygiene.py
+      - name: Commit the production evidence implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add matched registered OpenROAD physical evidence'
+          git push origin HEAD:feat/openroad-registered-physical-evidence
