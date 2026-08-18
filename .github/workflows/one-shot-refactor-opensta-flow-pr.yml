@@ -1,0 +1,63 @@
+name: Run one-shot OpenSTA timing refactor
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  run-one-shot:
+    if: >-
+      github.head_ref == 'refactor/opensta-timing-flow' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/opensta-timing-flow
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Execute the reviewed one-shot payload
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path(
+              '.github/workflows/one-shot-refactor-opensta-flow.yml'
+          ).read_text(encoding='utf-8').splitlines()
+          blocks: list[str] = []
+          index = 0
+          while index < len(source):
+              if source[index] != '        run: |':
+                  index += 1
+                  continue
+              index += 1
+              block: list[str] = []
+              while index < len(source):
+                  line = source[index]
+                  if line.startswith('          '):
+                      block.append(line[10:])
+                      index += 1
+                      continue
+                  if not line:
+                      block.append('')
+                      index += 1
+                      continue
+                  break
+              blocks.append('\n'.join(block))
+          if len(blocks) != 3:
+              raise SystemExit(
+                  f'expected three one-shot run blocks, found {len(blocks)}'
+              )
+          Path('/tmp/opensta-refactor-one-shot.sh').write_text(
+              '#!/usr/bin/env bash\nset -euo pipefail\n' +
+              '\n\n'.join(blocks) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          chmod +x /tmp/opensta-refactor-one-shot.sh
+          /tmp/opensta-refactor-one-shot.sh
