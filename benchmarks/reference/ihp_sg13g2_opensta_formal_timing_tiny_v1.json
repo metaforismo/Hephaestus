@@ -1,0 +1,136 @@
+{
+  "case": {
+    "domain": "quantized_integer_core_before_row_scaling",
+    "formally_proved_timed_netlists": 6,
+    "input_bits": 48,
+    "latency_cycles": 0,
+    "output_bits": 48,
+    "source": "examples/tiny_weights.json",
+    "source_sweep_runs": 18,
+    "unique_mapped_verilog_digests": 6
+  },
+  "claim_boundary": {
+    "all_timed_netlists_formally_equivalent": true,
+    "formal_negative_control_counterexample_found": true,
+    "opensta_pre_layout_timing_analyzed": true,
+    "parasitics_annotated": false,
+    "placement_performed": false,
+    "post_layout_pex_verified": false,
+    "power_estimated": false,
+    "routing_performed": false,
+    "signoff_sta_performed": false,
+    "silicon_verified": false,
+    "timing_closed": false,
+    "timing_repeatability_verified": true
+  },
+  "expected": {
+    "constant_multipliers": {
+      "labels": {
+        "d4000ps": {
+          "abc_delay_picoseconds": 2285.89,
+          "abc_library_area": 6277.824,
+          "attempts": 2,
+          "formal_proof_representative": "d4000ps",
+          "mapped_verilog_sha256": "394c1bc84bb76c8437902a5bc2633d9e6085a70f2bcc26b1438efe1f7e787311",
+          "opensta_data_delay_ns": 2.400267601,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.599732399
+        },
+        "unconstrained": {
+          "abc_delay_picoseconds": 2270.49,
+          "abc_library_area": 6334.0704,
+          "attempts": 2,
+          "formal_proof_representative": "unconstrained",
+          "mapped_verilog_sha256": "fe1d50b267afec673ffca7a67428628bb37438c0e1eeb52ceb678deb4ceb79ff",
+          "opensta_data_delay_ns": 2.390366912,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.609633088
+        }
+      }
+    },
+    "naive_shift_add": {
+      "labels": {
+        "d4000ps": {
+          "abc_delay_picoseconds": 2217.09,
+          "abc_library_area": 6306.8544,
+          "attempts": 2,
+          "formal_proof_representative": "d4000ps",
+          "mapped_verilog_sha256": "1ac036fd60ab5da5ddeef17f1bdbbab62386f87e9a217a574e1ade0dae8e0137",
+          "opensta_data_delay_ns": 2.40017879,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.59982121
+        },
+        "unconstrained": {
+          "abc_delay_picoseconds": 2183.17,
+          "abc_library_area": 6339.5136,
+          "attempts": 2,
+          "formal_proof_representative": "unconstrained",
+          "mapped_verilog_sha256": "079994cdec6a0f80302484405a959444a1bf1f96fca4f2402c227e6fae28470c",
+          "opensta_data_delay_ns": 2.35631144,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.64368856
+        }
+      }
+    },
+    "shared_dag": {
+      "labels": {
+        "d4000ps": {
+          "abc_delay_picoseconds": 2077.58,
+          "abc_library_area": 5386.9536,
+          "attempts": 2,
+          "formal_proof_representative": "d4000ps",
+          "mapped_verilog_sha256": "d47c3ed1e5b90f9b75017b4b2bcdd3f0a38b35b99a5f2ef960bf02576296fb0c",
+          "opensta_data_delay_ns": 2.240758538,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.759241462
+        },
+        "unconstrained": {
+          "abc_delay_picoseconds": 2029.49,
+          "abc_library_area": 5439.5712,
+          "attempts": 2,
+          "formal_proof_representative": "unconstrained",
+          "mapped_verilog_sha256": "fe40314e820d4d2552ee528902bce3c4037735d8c3f7df0e44131295a2768d36",
+          "opensta_data_delay_ns": 2.187032223,
+          "total_negative_slack_ns": 0.0,
+          "worst_slack_ns": 1.812967777
+        }
+      }
+    }
+  },
+  "reference_id": "ihp-sg13g2-opensta-formal-timing-tiny-v1",
+  "schema": "hephaestus.opensta-formal-timing-reference.v1",
+  "source_evidence": {
+    "abc_area_delay_evidence_sha256": "7cd1d9b4e66e14a5d5eac89dc7b222d1c4b476614a3082572c3e5521b0e0e29c",
+    "artifact_sha256": "29db05b84654059944df43c5f2c371fecda6a0cf41fe0228a4a97962b03ac44a",
+    "binding_sha256": "7e3f6850a843931a36048fcfa387ca846c52d08d9a80d3e77742380e97b8f95b",
+    "formal_evidence_sha256": "bec31c2de01c7dbb96efc3693a0bffdd63cc5af8a2cec03718d9f34f1024baf9",
+    "qualifying_head_sha": "ab66a895dc22eae2be0fef22dcd818e6ce58ac6d",
+    "qualifying_workflow_run": 32144004895,
+    "timing_evidence_sha256": "d5c0213acebda16f3c143a51a0271458b6013f383e7ba8482c7c518beb439b59"
+  },
+  "technology": {
+    "liberty_name": "sg13g2_stdcell_typ_1p20V_25C",
+    "liberty_sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396",
+    "nominal_temperature_c": 25.0,
+    "nominal_voltage": 1.2,
+    "technology_id": "ihp-sg13g2-stdcell-typ-1p20v-25c"
+  },
+  "timing_contract": {
+    "driving_cell": "sg13g2_buf_4",
+    "input_delay_ns": 0.0,
+    "output_delay_ns": 0.0,
+    "output_load_pf": 0.01,
+    "parasitics": null,
+    "virtual_clock_period_ns": 4.0,
+    "wire_model": "Liberty/default pre-layout model as interpreted by OpenSTA"
+  },
+  "tool": {
+    "binary_reproducibility_verified": false,
+    "commit": "2b751f0e8196b05ef4ed8246b7e27c63c967ec6d",
+    "cudd_bytes": 1175302,
+    "cudd_sha256": "b8e966b4562c96a03e7fbea239729587d7b395d53cadcc39a7203b49cf7eeb69",
+    "qualifying_binary_sha256": "8e03a84073d0265292e7fe12ffec68cdc61f70a24a7eb404e53730b7e4d8298d",
+    "repository": "parallaxsw/OpenSTA",
+    "version_prefix": "OpenSTA 3.1.0 "
+  }
+}

@@ -1,0 +1,280 @@
+name: Pinned OpenSTA pre-layout timing evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/opensta-timing-evidence
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formally-proved-pre-layout-timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned synthesis and OpenSTA build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            curl \
+            flex \
+            git \
+            'iverilog=12.0-2build2' \
+            libeigen3-dev \
+            libfl-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Build the captured OpenSTA binary
+        run: bash scripts/build_pinned_opensta.sh build/opensta-evidence/tooling
+      - name: Install and lint Hephaestus
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/opensta_binding.py \
+            tests/test_opensta_binding.py \
+            scripts/opensta_sdc_probe.py \
+            scripts/opensta_sdc_probe_base.py
+          ruff format --check \
+            src/hephaestus/opensta_binding.py \
+            tests/test_opensta_binding.py \
+            scripts/opensta_sdc_probe.py \
+            scripts/opensta_sdc_probe_base.py
+          pytest tests/test_opensta_binding.py
+      - name: Fetch and verify the pinned IHP Liberty
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/'
+                  'ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/opensta-evidence/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'technology.json').write_text(
+              json.dumps(config, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/opensta-evidence/input/url.txt)" \
+            --output build/opensta-evidence/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/opensta-evidence/input/sha256.txt)" \
+            build/opensta-evidence/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build the matched ABC area-delay sweep
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/opensta-evidence/source \
+            --module hephaestus_opensta_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/opensta-evidence/source \
+            --out build/opensta-evidence/matched \
+            --module hephaestus_opensta \
+            --verify-vectors 256 \
+            --seed 47 \
+            --simulate
+          python -m hephaestus.abc_timing build/opensta-evidence/matched \
+            --technology \
+              configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/opensta-evidence/input/technology.lib \
+            --config configs/evidence/ihp_sg13g2_abc_area_delay_v1.json \
+            --out build/opensta-evidence/area-delay \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prove every distinct ABC-mapped netlist
+        run: |
+          python -m hephaestus.abc_timing_formal \
+            build/opensta-evidence/area-delay \
+            --codes build/opensta-evidence/source/codes.npy \
+            --out build/opensta-evidence/formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Prepare and run matched OpenSTA analyses
+        run: |
+          python scripts/opensta_sdc_probe.py prepare \
+            build/opensta-evidence/area-delay \
+            --out build/opensta-evidence/timing \
+            --period-ns 4.0 \
+            --input-delay-ns 0.0 \
+            --output-delay-ns 0.0 \
+            --driving-cell sg13g2_buf_4 \
+            --output-load-pf 0.01 \
+            --labels unconstrained d4000ps
+          python scripts/opensta_sdc_probe.py run \
+            build/opensta-evidence/timing \
+            --sta build/opensta-evidence/tooling/opensta.bin \
+            --tool-metadata build/opensta-evidence/tooling/tool.json \
+            --attempts 2 \
+            --timeout 300
+      - name: Bind timing to exact formal proofs and regression reference
+        run: |
+          python -m hephaestus.opensta_binding \
+            build/opensta-evidence/formal/abc_area_delay_formal_evidence.json \
+            build/opensta-evidence/timing/opensta_sdc_probe.json \
+            --out build/opensta-evidence/opensta_formal_binding.json
+          python - <<'PY'
+          import json
+          import math
+          import re
+          from pathlib import Path
+
+          root = Path('build/opensta-evidence')
+          binding = json.loads(
+              (root / 'opensta_formal_binding.json').read_text(encoding='utf-8')
+          )
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/'
+                  'ihp_sg13g2_opensta_formal_timing_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+
+          assert binding['schema'] == 'hephaestus.opensta-formal-binding.v1'
+          assert binding['evidence_level'] == (
+              'opensta_pre_layout_timing_of_formally_proved_abc_netlists'
+          )
+          assert reference['schema'] == (
+              'hephaestus.opensta-formal-timing-reference.v1'
+          )
+          assert reference['reference_id'] == (
+              'ihp-sg13g2-opensta-formal-timing-tiny-v1'
+          )
+          assert binding['scope'] == {
+              'backends': [
+                  'shared_dag',
+                  'naive_shift_add',
+                  'constant_multipliers',
+              ],
+              'formally_proved_timed_netlists': 6,
+              'unique_mapped_verilog_digests': 6,
+              'combinational': True,
+              'sequential_depth': 0,
+              'parasitics_annotated': False,
+          }
+          assert reference['case']['input_bits'] == 48
+          assert reference['case']['output_bits'] == 48
+          assert reference['case']['source_sweep_runs'] == 18
+          assert binding['technology']['technology_id'] == (
+              reference['technology']['technology_id']
+          )
+          assert binding['technology']['liberty']['sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          assert binding['source']['liberty_sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          current_abc_digest = binding['source'][
+              'abc_area_delay_evidence_sha256'
+          ]
+          qualifying_abc_digest = reference['source_evidence'][
+              'abc_area_delay_evidence_sha256'
+          ]
+          assert re.fullmatch(r'[0-9a-f]{64}', current_abc_digest), (
+              'current ABC evidence digest', current_abc_digest
+          )
+          assert re.fullmatch(r'[0-9a-f]{64}', qualifying_abc_digest), (
+              'qualifying ABC evidence digest', qualifying_abc_digest
+          )
+          assert binding['tool']['repository'] == reference['tool']['repository'], (
+              binding['tool']['repository'], reference['tool']['repository']
+          )
+          assert binding['tool']['commit'] == reference['tool']['commit'], (
+              binding['tool']['commit'], reference['tool']['commit']
+          )
+          assert binding['tool']['banner'].startswith(
+              reference['tool']['version_prefix']
+          )
+          assert binding['tool']['binary_reproducibility_verified'] is False
+          assert binding['timing_contract'] == reference['timing_contract'], (
+              binding['timing_contract'], reference['timing_contract']
+          )
+          assert binding['claims'] == reference['claim_boundary'], (
+              binding['claims'], reference['claim_boundary']
+          )
+
+          expected = {
+              (backend, label): values
+              for backend, backend_data in reference['expected'].items()
+              for label, values in backend_data['labels'].items()
+          }
+          actual = {
+              (result['backend'], result['label']): result
+              for result in binding['results']
+          }
+          assert set(actual) == set(expected), (set(actual), set(expected))
+          assert len(
+              {result['mapped_verilog_sha256'] for result in actual.values()}
+          ) == 6
+
+          for pair, pinned in expected.items():
+              result = actual[pair]
+              assert result['mapped_verilog_sha256'] == (
+                  pinned['mapped_verilog_sha256']
+              ), (pair, result['mapped_verilog_sha256'], pinned['mapped_verilog_sha256'])
+              assert result['formal_proof_representative'] == (
+                  pinned['formal_proof_representative']
+              ), (
+                  pair,
+                  result['formal_proof_representative'],
+                  pinned['formal_proof_representative'],
+              )
+              assert result['attempts'] == pinned['attempts'], (
+                  pair, result['attempts'], pinned['attempts']
+              )
+              assert result['formal_equivalence_verified']
+              assert result['timing_repeatability_verified']
+              for metric, tolerance in (
+                  ('abc_library_area', 1e-6),
+                  ('abc_delay_picoseconds', 1e-6),
+                  ('opensta_data_delay_ns', 1e-9),
+                  ('worst_slack_ns', 1e-9),
+                  ('total_negative_slack_ns', 1e-9),
+              ):
+                  assert math.isclose(
+                      result[metric],
+                      pinned[metric],
+                      rel_tol=0,
+                      abs_tol=tolerance,
+                  ), (pair, metric, result[metric], pinned[metric])
+          PY
+      - name: Upload complete formally bound timing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pinned-opensta-formal-timing-evidence
+          path: |
+            build/opensta-evidence
+            !build/opensta-evidence/tooling/OpenSTA
+            !build/opensta-evidence/tooling/cudd-3.0.0
+          if-no-files-found: error
+          retention-days: 30

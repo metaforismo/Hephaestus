@@ -13,10 +13,11 @@ exist as shifts, signs, wires, and shared addition nodes.
 > DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
 > evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
 > exhaustive SAT equivalence of mapped standard-cell netlists, technology-aware ABC area-delay
-> sweeps under versioned input-driver and output-load assumptions, and exhaustive SAT proof of
-> every distinct netlist produced by that sweep.
+> sweeps under versioned input-driver and output-load assumptions, exhaustive SAT proof of every
+> distinct netlist produced by that sweep, and pinned OpenSTA pre-layout timing of the six formally
+> proved Pareto netlists with digest-level proof binding.
 >
-> **Not claimed:** a complete transformer compiler, timing or power closure, competitive
+> **Not claimed:** a complete transformer compiler, sign-off timing or power closure, competitive
 > post-layout PPA, 40,000 tokens/s, a 7 nm tapeout, extracted energy, or measured silicon.
 
 ## Why this direction
@@ -165,6 +166,35 @@ silicon. See [ABC area-delay evidence](docs/ABC_AREA_DELAY.md) and
 [ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md) for the assumptions, exact reports,
 proof grouping, negative control, regression references, and claim boundaries.
 
+## First formally bound OpenSTA result
+
+The six distinct Pareto netlists were then analyzed by OpenSTA built from pinned source commit
+`2b751f0e8196b05ef4ed8246b7e27c63c967ec6d`. Each timing result is accepted only when its
+mapped-Verilog SHA-256 digest matches a successful exhaustive SAT proof of the exact same netlist.
+
+The common pre-layout boundary contract uses a 4.0 ns virtual reporting period, zero input and
+output delay, `sg13g2_buf_4` input drivers, 0.01 pF of load per primary output, and no annotated
+parasitics.
+
+| Backend | ABC mapping | OpenSTA data delay | Worst slack |
+|---|---|---:|---:|
+| Shared Hephaestus DAG | `unconstrained` | **2.187032223 ns** | 1.812967777 ns |
+| Naive output-local shift/add | `unconstrained` | 2.356311440 ns | 1.643688560 ns |
+| Explicit constant-multiplier source | `unconstrained` | 2.390366912 ns | 1.609633088 ns |
+| Shared Hephaestus DAG | `d4000ps` | **2.240758538 ns** | 1.759241462 ns |
+| Naive output-local shift/add | `d4000ps` | 2.400178790 ns | 1.599821210 ns |
+| Explicit constant-multiplier source | `d4000ps` | 2.400267601 ns | 1.599732399 ns |
+
+For this exact microcase, the shared DAG is fastest at both observed Pareto mappings. At the
+`unconstrained` point it reduces OpenSTA data delay by 7.1841% versus naive shift/add and 8.5064%
+versus the constant-multiplier source. Every analysis is run twice with one captured OpenSTA binary
+and must produce byte-identical reports and identical normalized metrics.
+
+This is formally bound pre-layout timing evidence, not sign-off STA or physical timing closure. It
+has no placement, routing, extracted RC, power, DRC, LVS, PEX, or silicon claim. See
+[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md) for the pinned toolchain, six
+netlist digests, regression reference, artifact provenance, repeatability rule, and claim boundary.
+
 ## Research thesis
 
 Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
@@ -190,6 +220,7 @@ See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
 [Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md),
 [ABC area-delay evidence](docs/ABC_AREA_DELAY.md),
 [ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md),
+[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md),
 [Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
 [Research plan](docs/RESEARCH.md).
 
