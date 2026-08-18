@@ -1,0 +1,152 @@
+
+
+def test_common_config_and_sdc_are_explicit() -> None:
+    contract = _contract()
+    backend = {
+        "wrapper_module": "wrapper_shared",
+        "core_rtl": "shared_core.sv",
+        "wrapper_rtl": "shared_wrapper.sv",
+    }
+
+    config = emit_config(contract, backend_name="shared_dag", backend=backend)
+    sdc = emit_sdc(contract)
+
+    assert "export PLATFORM = ihp-sg13g2" in config
+    assert "export DESIGN_NAME = wrapper_shared" in config
+    assert "export DIE_AREA = 0 0 240 240" in config
+    assert "export CORE_AREA = 20 20 220 220" in config
+    assert "export PLACE_DENSITY = 0.5" in config
+    assert "export MIN_ROUTING_LAYER = Metal2" in config
+    assert "export MAX_ROUTING_LAYER = Metal5" in config
+    assert "create_clock -name core_clock -period 4" in sdc
+    assert "set_clock_uncertainty 0.1" in sdc
+    assert "set_driving_cell -lib_cell sg13g2_buf_4" in sdc
+    assert "set_load 0.01" in sdc
+
+
+def test_gds_digest_ignores_only_library_and_structure_timestamps(tmp_path: Path) -> None:
+    first = tmp_path / "first.gds"
+    second = tmp_path / "second.gds"
+    changed = tmp_path / "changed.gds"
+    first.write_bytes(_fake_gds(1, geometry_byte=7))
+    second.write_bytes(_fake_gds(9, geometry_byte=7))
+    changed.write_bytes(_fake_gds(9, geometry_byte=8))
+
+    assert gds_timestamp_normalized_sha256(first) == gds_timestamp_normalized_sha256(
+        second
+    )
+    assert gds_timestamp_normalized_sha256(first) != gds_timestamp_normalized_sha256(
+        changed
+    )
+
+
+def test_def_parser_extracts_common_geometry_and_counts(tmp_path: Path) -> None:
+    path = tmp_path / "final.def"
+    path.write_text(
+        """VERSION 5.8 ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 240000 240000 ) ;
+ROW ROW_0 CoreSite 0 0 N DO 10 BY 1 STEP 480 0 ;
+TRACKS X 0 DO 10 STEP 420 LAYER Metal1 ;
+COMPONENTS 12 ;
+END COMPONENTS
+NETS 9 ;
+END NETS
+SPECIALNETS 2 ;
+END SPECIALNETS
+END DESIGN
+""",
+        encoding="utf-8",
+    )
+
+    metrics = parse_def_metrics(path)
+
+    assert metrics["die_area_um"] == [0.0, 0.0, 240.0, 240.0]
+    assert metrics["die_width_um"] == 240.0
+    assert metrics["component_count"] == 12
+    assert metrics["net_count"] == 9
+    assert metrics["special_net_count"] == 2
+    assert metrics["row_count"] == 1
+    assert metrics["track_statement_count"] == 1
+
+
+def test_metadata_selector_excludes_runtime_noise() -> None:
+    selected = stable_metadata_metrics(
+        {
+            "finish__design__instance__area__stdcell": 123.5,
+            "finish__timing__setup__ws": -0.02,
+            "finish__route__wirelength": 88,
+            "run__runtime__seconds": 91.0,
+            "tool__version": "x",
+            "design": "name",
+        }
+    )
+
+    assert selected == {
+        "finish__design__instance__area__stdcell": 123.5,
+        "finish__route__wirelength": 88,
+        "finish__timing__setup__ws": -0.02,
+    }
+
+
+def test_prepare_binds_registered_sources_and_probe(tmp_path: Path) -> None:
+    bundle, registered_reference, probe_reference, physical_contract = _source_fixture(
+        tmp_path
+    )
+
+    manifest = prepare_physical_evidence(
+        bundle,
+        registered_reference,
+        probe_reference,
+        physical_contract,
+        tmp_path / "prepared",
+    )
+
+    assert manifest["schema"] == "hephaestus.openroad-physical-prepared.v1"
+    assert set(manifest["backends"]) == set(BACKENDS)
+    assert manifest["claims"]["registered_source_binding_verified"]
+    assert manifest["claims"]["orfs_image_digest_pinned"]
+    assert manifest["claims"]["placement_performed"] is False
+    assert (tmp_path / "prepared/prepared.json").is_file()
+    for backend in BACKENDS:
+        design = tmp_path / "prepared" / manifest["backends"][backend]["design_dir"]
+        assert (design / "config.mk").is_file()
+        assert (design / "constraint.sdc").is_file()
+        assert (design / "rules.json").is_file()
+
+
+def test_prepare_rejects_a_probe_for_different_shared_rtl(tmp_path: Path) -> None:
+    bundle, registered_reference, probe_reference, physical_contract = _source_fixture(
+        tmp_path
+    )
+    probe = json.loads(probe_reference.read_text(encoding="utf-8"))
+    probe["source"]["core_sha256"] = "f" * 64
+    _write_json(probe_reference, probe)
+
+    with pytest.raises(OpenROADPhysicalError, match="qualifying smoke run"):
+        prepare_physical_evidence(
+            bundle,
+            registered_reference,
+            probe_reference,
+            physical_contract,
+            tmp_path / "prepared",
+        )
+
+
+def test_prepare_rejects_an_unverified_registered_bundle(tmp_path: Path) -> None:
+    bundle, registered_reference, probe_reference, physical_contract = _source_fixture(
+        tmp_path
+    )
+    manifest_path = bundle / "registered_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["claims"]["reset_flush_verified_on_executed_schedule"] = False
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(OpenROADPhysicalError, match="not fully qualified"):
+        prepare_physical_evidence(
+            bundle,
+            registered_reference,
+            probe_reference,
+            physical_contract,
+            tmp_path / "prepared",
+        )
