@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - main
-      - feat/abc-area-delay-formal-evidence
   pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -180,7 +183,7 @@ jobs:
           assert negative['backend'] == 'shared_dag'
           assert negative['proof']['passed']
           assert negative['proof']['counterexample_found']
-          assert not negative['proof']['proof_success']
+          assert not negative['proof_success']
           assert not negative['proof']['unsupported_cell_error']
 
           assert evidence['claims'] == {

@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -19,5 +23,7 @@ jobs:
           python-version: '3.12'
       - name: Reject generated and PDK artifacts
         run: python scripts/check_repo_hygiene.py
+      - name: Require bounded workflow concurrency
+        run: python scripts/check_workflow_concurrency.py
       - name: Require a clean checkout
         run: test -z "$(git status --porcelain)"

@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - main
-      - feat/ihp-abc-area-delay-evidence
   pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -237,7 +240,7 @@ jobs:
           assert (root / 'constraints' / 'abc.constr').is_file()
           assert (root / 'technology' / 'technology.lib').is_file()
           PY
-      - name: Upload ABC area-delay evidence bundle
+      - name: Upload AC area-delay evidence bundle
         uses: actions/upload-artifact@v4
         with:
           name: hephaestus-ihp-abc-area-delay-evidence
