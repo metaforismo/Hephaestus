@@ -32,9 +32,11 @@ jobs:
           one_shot = workflows / 'one-shot-actions-concurrency.yml'
           workflow_expression = '${' + '{ github.workflow }}'
           ref_expression = '${' + '{ github.event.pull_request.number || github.ref }}'
+          group_prefix = f'  group: "{workflow_expression}-'
+          group_suffix = f'{ref_expression}"\n'
           block = (
               'concurrency:\n'
-              f'  group: "{workflow_expression}-{ref_expression}"\n'
+              f'{group_prefix}{group_suffix}'
               '  cancel-in-progress: true\n\n'
           )
 
@@ -62,7 +64,12 @@ jobs:
                   import sys
                   from pathlib import Path
 
-                  EXPECTED = {block.rstrip()!r}
+                  EXPECTED = (
+                      {'concurrency:\n'!r}
+                      {group_prefix!r}
+                      {group_suffix!r}
+                      {'  cancel-in-progress: true'!r}
+                  )
 
 
                   def violations(root: Path) -> list[str]:
