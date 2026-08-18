@@ -1,0 +1,330 @@
+name: Research ORFS IHP registered smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ORFS_IMAGE: openroad/orfs@sha256:622127907647801ade403dae211ddafc5dbc1e6c8e6c2cd11c2e5290162380e7
+  ORFS_COMMIT: da8f092a02a8e75658cc3100691aabff05f35629
+
+jobs:
+  shared-dag-route-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Capture host and Docker provenance
+        run: |
+          set -euo pipefail
+          mkdir -p build/orfs-probe/host build/orfs-probe/toolchain
+          uname -a | tee build/orfs-probe/host/uname.txt
+          lscpu | tee build/orfs-probe/host/lscpu.txt
+          grep -m1 '^flags' /proc/cpuinfo \
+            | tee build/orfs-probe/host/cpu-flags.txt
+          docker version \
+            | tee build/orfs-probe/host/docker-version.txt
+          docker info \
+            | tee build/orfs-probe/host/docker-info.txt
+      - name: Install pinned local RTL and formal tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Rebuild the formally bound registered source bundle
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/orfs-probe/source \
+            --module hephaestus_orfs_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/orfs-probe/source \
+            --out build/orfs-probe/matched \
+            --module hephaestus_orfs \
+            --verify-vectors 256 \
+            --seed 67 \
+            --simulate
+          python -m hephaestus.formal build/orfs-probe/matched \
+            --codes build/orfs-probe/source/codes.npy \
+            --out build/orfs-probe/formal \
+            --max-input-bits 64 \
+            --timeout 300
+          python -m hephaestus.registered build/orfs-probe/matched \
+            --codes build/orfs-probe/source/codes.npy \
+            --formal-evidence build/orfs-probe/formal/formal_evidence.json \
+            --out build/orfs-probe/registered \
+            --module hephaestus_orfs_tile \
+            --verify-vectors 256 \
+            --seed 67 \
+            --simulate
+      - name: Stage one digest-bound ORFS design
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          source = Path('build/orfs-probe/registered')
+          design = Path('build/orfs-probe/design')
+          design.mkdir(parents=True, exist_ok=True)
+          manifest_path = source / 'registered_manifest.json'
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          backend = manifest['backends']['shared_dag']
+
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          artifacts = {}
+          for role, manifest_name, manifest_digest in (
+              ('core', backend['core_rtl'], backend['core_sha256']),
+              ('wrapper', backend['wrapper_rtl'], backend['wrapper_sha256']),
+          ):
+              source_path = source / manifest_name
+              if sha256(source_path) != manifest_digest:
+                  raise SystemExit(f'{role} digest differs from registered manifest')
+              target = design / source_path.name
+              shutil.copyfile(source_path, target)
+              artifacts[role] = {
+                  'path': target.name,
+                  'sha256': sha256(target),
+              }
+
+          shutil.copyfile(manifest_path, design / 'source_registered_manifest.json')
+          top = backend['wrapper_module']
+          config = f'''\
+          export DESIGN_NICKNAME = hephaestus_shared_dag_registered
+          export DESIGN_NAME = {top}
+          export PLATFORM = ihp-sg13g2
+
+          export VERILOG_FILES = /work/build/orfs-probe/design/{backend['core_rtl']} \\
+                                 /work/build/orfs-probe/design/{backend['wrapper_rtl']}
+          export SDC_FILE = /work/build/orfs-probe/design/constraint.sdc
+
+          export DIE_AREA = 0 0 192.0 189.0
+          export CORE_AREA = 19.2 18.9 172.8 170.1
+          export PLACE_DENSITY = 0.55
+
+          export USE_FILL = 1
+          export DESIGN_TYPE = CELL
+          export TNS_END_PERCENT = 100
+          export SWAP_ARITH_OPERATORS = 1
+          export OPENROAD_HIERARCHICAL = 1
+          export SKIP_GATE_CLONING = 1
+          '''
+          (design / 'config.mk').write_text(config, encoding='utf-8')
+
+          sdc = f'''\
+          current_design {top}
+
+          set clk_name core_clock
+          set clk_port_name clk
+          set clk_period 4.0
+          set clk_io_delay 0.4
+
+          set clk_port [get_ports $clk_port_name]
+          create_clock -name $clk_name -period $clk_period $clk_port
+          set io_clock_name vclk_$clk_name
+          create_clock -name $io_clock_name -period $clk_period
+          set_clock_latency 0.20 [get_clocks $clk_name]
+          set_clock_latency 0.20 [get_clocks $io_clock_name]
+          set_clock_uncertainty 0.10 [get_clocks $clk_name]
+
+          set non_clock_inputs [all_inputs -no_clocks]
+          set_input_delay $clk_io_delay -clock $io_clock_name $non_clock_inputs
+          set_output_delay $clk_io_delay -clock $io_clock_name [all_outputs]
+          set_driving_cell -lib_cell sg13g2_buf_4 $non_clock_inputs
+          set_load 0.01 [all_outputs]
+          '''
+          (design / 'constraint.sdc').write_text(sdc, encoding='utf-8')
+
+          contract = {
+              'schema': 'hephaestus.orfs-registered-smoke-contract.v1',
+              'research_probe_only': True,
+              'backend': 'shared_dag',
+              'top_module': top,
+              'source_registered_manifest_sha256': sha256(manifest_path),
+              'source_artifacts': artifacts,
+              'technology': 'ihp-sg13g2',
+              'clock_period_ns': 4.0,
+              'input_delay_ns': 0.4,
+              'output_delay_ns': 0.4,
+              'clock_uncertainty_ns': 0.1,
+              'input_driver_cell': 'sg13g2_buf_4',
+              'output_load_pf': 0.01,
+              'die_area_um': [0.0, 0.0, 192.0, 189.0],
+              'core_area_um': [19.2, 18.9, 172.8, 170.1],
+              'place_density': 0.55,
+              'runtime_coefficient_reads_per_matvec': 0,
+              'claims': {
+                  'orfs_flow_completed': False,
+                  'placement_performed': False,
+                  'routing_performed': False,
+                  'extracted_spef_present': False,
+                  'post_physical_equivalence_verified': False,
+                  'drc_clean': False,
+                  'lvs_clean': False,
+                  'power_estimated_with_activity': False,
+                  'post_layout_pex_verified': False,
+                  'silicon_verified': False,
+              },
+          }
+          (design / 'probe_contract.json').write_text(
+              json.dumps(contract, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+      - name: Pull and identify the pinned ORFS image
+        run: |
+          set -euo pipefail
+          docker pull "$ORFS_IMAGE" \
+            | tee build/orfs-probe/toolchain/docker-pull.txt
+          docker image inspect "$ORFS_IMAGE" \
+            > build/orfs-probe/toolchain/docker-image-inspect.json
+          docker run --rm \
+            -e EXPECTED_ORFS_COMMIT="$ORFS_COMMIT" \
+            "$ORFS_IMAGE" \
+            bash -lc '
+              set -euo pipefail
+              cd /OpenROAD-flow-scripts
+              echo "expected_orfs_commit=$EXPECTED_ORFS_COMMIT"
+              if git rev-parse HEAD >/dev/null 2>&1; then
+                echo "container_orfs_commit=$(git rev-parse HEAD)"
+              else
+                echo "container_orfs_commit=not-retained-in-image"
+              fi
+              source ./env.sh
+              openroad -version
+              yosys -V
+            ' | tee build/orfs-probe/toolchain/container-tools.txt
+      - name: Run the complete shared-DAG ORFS flow
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /OpenROAD-flow-scripts \
+            "$ORFS_IMAGE" \
+            bash -lc '
+              set -euo pipefail
+              source ./env.sh
+              make -C flow \
+                DESIGN_CONFIG=/work/build/orfs-probe/design/config.mk \
+                WORK_HOME=/work/build/orfs-probe/work \
+                FLOW_VARIANT=smoke \
+                finish
+              make -C flow \
+                DESIGN_CONFIG=/work/build/orfs-probe/design/config.mk \
+                WORK_HOME=/work/build/orfs-probe/work \
+                FLOW_VARIANT=smoke \
+                metadata-generate
+            ' | tee build/orfs-probe/orfs.stdout.txt
+          sudo chown -R "$(id -u):$(id -g)" build/orfs-probe
+      - name: Bind and validate the routed probe outputs
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('build/orfs-probe')
+          design = root / 'design'
+          results = (
+              root
+              / 'work/results/ihp-sg13g2/hephaestus_shared_dag_registered/smoke'
+          )
+          reports = (
+              root
+              / 'work/reports/ihp-sg13g2/hephaestus_shared_dag_registered/smoke'
+          )
+          required = {
+              'final_gds': results / '6_final.gds',
+              'final_def': results / '6_final.def',
+              'final_odb': results / '6_final.odb',
+              'final_verilog': results / '6_final.v',
+              'final_spef': results / '6_final.spef',
+              'metadata': reports / 'metadata.json',
+          }
+
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          for label, path in required.items():
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'missing or empty ORFS output {label}: {path}')
+
+          contract = json.loads(
+              (design / 'probe_contract.json').read_text(encoding='utf-8')
+          )
+          metadata = json.loads(required['metadata'].read_text(encoding='utf-8'))
+          result = {
+              'schema': 'hephaestus.orfs-registered-smoke-result.v1',
+              'evidence_level': 'research_orfs_registered_route_probe',
+              'research_probe_only': True,
+              'contract': contract,
+              'toolchain': {
+                  'orfs_image': (
+                      'openroad/orfs@sha256:'
+                      '622127907647801ade403dae211ddafc5dbc1e6c8e6c2cd11c2e5290162380e7'
+                  ),
+                  'orfs_source_commit_association': (
+                      'da8f092a02a8e75658cc3100691aabff05f35629'
+                  ),
+              },
+              'outputs': {
+                  label: {
+                      'path': path.relative_to(root).as_posix(),
+                      'size_bytes': path.stat().st_size,
+                      'sha256': sha256(path),
+                  }
+                  for label, path in required.items()
+              },
+              'metadata': metadata,
+              'claims': {
+                  'orfs_flow_completed': True,
+                  'placement_performed': True,
+                  'routing_performed': True,
+                  'extracted_spef_present': True,
+                  'post_physical_equivalence_verified': False,
+                  'drc_clean': False,
+                  'lvs_clean': False,
+                  'power_estimated_with_activity': False,
+                  'post_layout_pex_verified': False,
+                  'silicon_verified': False,
+              },
+          }
+          (root / 'probe_result.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(result['outputs'], indent=2, sort_keys=True))
+          PY
+      - name: Upload the complete research probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-research-orfs-ihp-registered-smoke
+          path: build/orfs-probe
+          if-no-files-found: error
+          retention-days: 14
