@@ -140,9 +140,7 @@ def test_binding_rejects_a_timing_digest_mismatch(tmp_path: Path) -> None:
 def test_binding_rejects_an_unproved_netlist(tmp_path: Path) -> None:
     formal_path, timing_path = _fixtures(tmp_path)
     formal = json.loads(formal_path.read_text(encoding="utf-8"))
-    formal["backends"]["shared_dag"]["runs"]["unconstrained"][
-        "equivalence_verified"
-    ] = False
+    formal["backends"]["shared_dag"]["runs"]["unconstrained"]["equivalence_verified"] = False
     _write(formal_path, formal)
 
     with pytest.raises(OpenSTABindingError, match="was not proved"):
@@ -163,9 +161,7 @@ def test_binding_rejects_duplicate_mapped_digests(tmp_path: Path) -> None:
     formal_path, timing_path = _fixtures(tmp_path)
     formal = json.loads(formal_path.read_text(encoding="utf-8"))
     timing = json.loads(timing_path.read_text(encoding="utf-8"))
-    digest = formal["backends"]["shared_dag"]["runs"]["unconstrained"][
-        "mapped_verilog_sha256"
-    ]
+    digest = formal["backends"]["shared_dag"]["runs"]["unconstrained"]["mapped_verilog_sha256"]
     formal["backends"]["naive_shift_add"]["runs"]["unconstrained"][
         "mapped_verilog_sha256"
     ] = digest
