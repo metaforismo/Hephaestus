@@ -18,7 +18,6 @@ from hephaestus.registered import (
 )
 from hephaestus.report import sha256_file
 
-
 BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
 
 
@@ -223,4 +222,72 @@ def test_testbench_uses_an_independent_expected_pipeline() -> None:
 
     assert "reg expected_valid;" in testbench
     assert "reg [OUTPUT_BITS-1:0] expected_y;" in testbench
-    assert "expected_vali
+    assert "expected_valid = schedule_valid[schedule_index];" in testbench
+    assert "y_shared_dag !== expected_y" in testbench
+    assert "reset did not clear output pipeline" in testbench
+
+
+def test_builder_binds_formal_evidence_and_emits_clean_claim_boundary(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    output = tmp_path / "registered"
+
+    manifest = build_registered_tiles(
+        bundle,
+        codes_path,
+        formal_path,
+        output,
+        module_name="tiny_registered",
+        random_vectors=8,
+        seed=13,
+        simulate=False,
+    )
+
+    assert manifest["schema"] == "hephaestus.registered-matched-tiles.v1"
+    assert manifest["contract"]["latency_cycles"] == 1
+    assert manifest["contract"]["initiation_interval_cycles"] == 1
+    assert manifest["contract"]["runtime_coefficient_reads_per_matvec"] == 0
+    assert manifest["claims"]["source_exhaustive_combinational_equivalence_verified"]
+    assert not manifest["claims"]["registered_backends_match_oracle_on_executed_schedule"]
+    assert manifest["claims"]["sequential_formal_equivalence_verified"] is False
+    assert manifest["claims"]["placement_performed"] is False
+    assert set(manifest["backends"]) == set(BACKENDS)
+    assert (output / "registered_manifest.json").is_file()
+    assert (output / "verification_oracle.json").is_file()
+    assert (output / "negative_control_registered.sv").is_file()
+
+
+def test_builder_rejects_formal_evidence_for_different_codes(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["source"]["codes_sha256"] = "0" * 64
+    _write_json(formal_path, formal)
+
+    with pytest.raises(RegisteredTileError, match="different quantized codes"):
+        build_registered_tiles(
+            bundle,
+            codes_path,
+            formal_path,
+            tmp_path / "registered",
+        )
+
+
+def test_builder_rejects_an_ineffective_formal_negative_control(tmp_path: Path) -> None:
+    bundle, codes_path, formal_path = _fixture(tmp_path)
+    formal = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal["negative_control"]["proof"]["counterexample_found"] = False
+    _write_json(formal_path, formal)
+
+    with pytest.raises(RegisteredTileError, match="required counterexample"):
+        build_registered_tiles(
+            bundle,
+            codes_path,
+            formal_path,
+            tmp_path / "registered",
+        )
+
+
+def test_verification_vectors_are_deterministic() -> None:
+    first = _verification_vectors(input_count=2, input_width=4, random_vectors=10, seed=99)
+    second = _verification_vectors(input_count=2, input_width=4, random_vectors=10, seed=99)
+
+    assert first == second
