@@ -1,0 +1,292 @@
+"""Digest-bound matched OpenROAD physical evidence for registered Hephaestus tiles."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+from .report import sha256_file, write_json
+
+BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+REQUIRED_OUTPUTS = {
+    "final_gds": "6_final.gds",
+    "final_def": "6_final.def",
+    "final_verilog": "6_final.v",
+    "final_open_db": "6_final.odb",
+    "final_spef": "6_final.spef",
+}
+_MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_GIT_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_IMAGE_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
+
+
+class OpenROADPhysicalError(RuntimeError):
+    """Raised when physical evidence cannot be prepared or bound safely."""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OpenROADPhysicalError(f"cannot read JSON artifact {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise OpenROADPhysicalError(f"JSON artifact must be an object: {path}")
+    return value
+
+
+def _safe_module(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _MODULE_RE.fullmatch(value) is None:
+        raise OpenROADPhysicalError(f"{context} is not a safe module name: {value!r}")
+    return value
+
+
+def _safe_name(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_.-]+", value) is None:
+        raise OpenROADPhysicalError(f"{context} is not a safe identifier: {value!r}")
+    return value
+
+
+def _require_digest(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise OpenROADPhysicalError(f"{context} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _positive_int(value: Any, *, context: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise OpenROADPhysicalError(f"{context} must be a positive integer")
+    return value
+
+
+def _number(value: Any, *, context: str, minimum: float | None = None) -> float:
+    if type(value) not in (int, float):
+        raise OpenROADPhysicalError(f"{context} must be numeric")
+    result = float(value)
+    if not result < float("inf") or not result > -float("inf"):
+        raise OpenROADPhysicalError(f"{context} must be finite")
+    if minimum is not None and result < minimum:
+        raise OpenROADPhysicalError(f"{context} must be at least {minimum}")
+    return result
+
+
+def _resolve_artifact(
+    root: Path,
+    raw_path: Any,
+    expected_digest: Any | None,
+    *,
+    context: str,
+) -> Path:
+    if not isinstance(raw_path, str) or not raw_path:
+        raise OpenROADPhysicalError(f"{context}.path must be a non-empty string")
+    relative = Path(raw_path)
+    if relative.is_absolute():
+        raise OpenROADPhysicalError(f"{context}.path must be relative")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise OpenROADPhysicalError(f"{context}.path escapes its artifact root") from exc
+    if resolved.is_symlink():
+        raise OpenROADPhysicalError(f"{context} must not be a symbolic link")
+    if not resolved.is_file():
+        raise OpenROADPhysicalError(f"{context} does not exist: {resolved}")
+    if expected_digest is not None:
+        digest = _require_digest(expected_digest, context=f"{context}.sha256")
+        actual = sha256_file(resolved)
+        if actual != digest:
+            raise OpenROADPhysicalError(
+                f"{context} digest mismatch: expected {digest}, got {actual}"
+            )
+    return resolved
+
+
+def _area(value: Any, *, context: str) -> tuple[float, float, float, float]:
+    if not isinstance(value, list) or len(value) != 4:
+        raise OpenROADPhysicalError(f"{context} must contain four coordinates")
+    x1, y1, x2, y2 = (
+        _number(item, context=f"{context}[{index}]")
+        for index, item in enumerate(value)
+    )
+    if x2 <= x1 or y2 <= y1:
+        raise OpenROADPhysicalError(f"{context} must have positive width and height")
+    return x1, y1, x2, y2
+
+
+def load_physical_config(path: Path) -> dict[str, Any]:
+    """Load and validate the versioned ORFS physical contract."""
+
+    config = _load_json(path.resolve())
+    if config.get("schema") != "hephaestus.openroad-physical-config.v1":
+        raise OpenROADPhysicalError("unsupported OpenROAD physical-config schema")
+    _safe_name(config.get("config_id"), context="config_id")
+    if config.get("platform") != "ihp-sg13g2":
+        raise OpenROADPhysicalError("the first physical contract requires ihp-sg13g2")
+
+    probe = config.get("research_probe")
+    if not isinstance(probe, dict) or probe.get("qualified") is not True:
+        raise OpenROADPhysicalError("physical promotion requires a qualified research probe")
+    if not _GIT_COMMIT_RE.fullmatch(str(probe.get("source_head_sha", ""))):
+        raise OpenROADPhysicalError("research probe source head must be a full Git commit")
+    _positive_int(probe.get("workflow_run_id"), context="research workflow_run_id")
+    _require_digest(
+        probe.get("probe_manifest_sha256"), context="research probe manifest digest"
+    )
+    artifact_digest = probe.get("artifact_digest")
+    if not isinstance(artifact_digest, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", artifact_digest
+    ) is None:
+        raise OpenROADPhysicalError("research artifact digest must be sha256:<digest>")
+
+    toolchain = config.get("toolchain")
+    if not isinstance(toolchain, dict):
+        raise OpenROADPhysicalError("toolchain contract is malformed")
+    image = toolchain.get("docker_image")
+    if not isinstance(image, str) or _IMAGE_RE.fullmatch(image) is None:
+        raise OpenROADPhysicalError("docker_image must use an immutable sha256 digest")
+    if toolchain.get("docker_repo_digest") != image:
+        raise OpenROADPhysicalError("docker image and repository digest must match exactly")
+    captured_versions = toolchain.get("captured_versions")
+    if not isinstance(captured_versions, list) or not captured_versions or any(
+        not isinstance(line, str) or not line for line in captured_versions
+    ):
+        raise OpenROADPhysicalError("captured tool versions must be a non-empty string list")
+    orfs_head = toolchain.get("orfs_git_head")
+    if not isinstance(orfs_head, str) or not orfs_head:
+        raise OpenROADPhysicalError("ORFS source identity must be recorded")
+    if orfs_head != "unavailable" and _GIT_COMMIT_RE.fullmatch(orfs_head) is None:
+        raise OpenROADPhysicalError("ORFS source identity must be a commit or unavailable")
+
+    clock = config.get("clock")
+    if not isinstance(clock, dict):
+        raise OpenROADPhysicalError("clock contract is malformed")
+    if clock.get("port") != "clk":
+        raise OpenROADPhysicalError("registered tile clock port must be clk")
+    period = _number(clock.get("period_ns"), context="clock period", minimum=0.001)
+    uncertainty = _number(
+        clock.get("uncertainty_ns"), context="clock uncertainty", minimum=0.0
+    )
+    if uncertainty >= period:
+        raise OpenROADPhysicalError("clock uncertainty must be smaller than the period")
+    _number(clock.get("transition_ns"), context="clock transition", minimum=0.0)
+
+    io = config.get("io")
+    if not isinstance(io, dict):
+        raise OpenROADPhysicalError("I/O contract is malformed")
+    _number(io.get("input_delay_ns"), context="input delay", minimum=0.0)
+    _number(io.get("output_delay_ns"), context="output delay", minimum=0.0)
+    _safe_module(io.get("input_driver_cell"), context="input driver cell")
+    _number(io.get("output_load_pf"), context="output load", minimum=0.000001)
+
+    floorplan = config.get("floorplan")
+    if not isinstance(floorplan, dict):
+        raise OpenROADPhysicalError("floorplan contract is malformed")
+    die = _area(floorplan.get("die_area_um"), context="die area")
+    core = _area(floorplan.get("core_area_um"), context="core area")
+    if core[0] <= die[0] or core[1] <= die[1] or core[2] >= die[2] or core[3] >= die[3]:
+        raise OpenROADPhysicalError("core area must be strictly inside the die area")
+    density = _number(floorplan.get("place_density"), context="place density")
+    if density <= 0.0 or density >= 1.0:
+        raise OpenROADPhysicalError("place density must be between zero and one")
+
+    routing = config.get("routing")
+    if not isinstance(routing, dict):
+        raise OpenROADPhysicalError("routing contract is malformed")
+    _safe_name(routing.get("minimum_layer"), context="minimum routing layer")
+    _safe_name(routing.get("maximum_layer"), context="maximum routing layer")
+
+    execution = config.get("execution")
+    if not isinstance(execution, dict):
+        raise OpenROADPhysicalError("execution contract is malformed")
+    attempts = _positive_int(
+        execution.get("attempts_per_backend"), context="attempts_per_backend"
+    )
+    if attempts != 2:
+        raise OpenROADPhysicalError("the production physical contract requires two attempts")
+    _positive_int(execution.get("timeout_minutes"), context="timeout_minutes")
+    _safe_name(execution.get("flow_variant"), context="flow_variant")
+    _safe_name(execution.get("design_nickname_prefix"), context="nickname prefix")
+    if execution.get("required_outputs") != REQUIRED_OUTPUTS:
+        raise OpenROADPhysicalError("required ORFS output contract drifted")
+    return config
+
+
+def _validate_registered_source(
+    bundle: Path,
+) -> tuple[dict[str, Any], dict[str, tuple[Path, Path]]]:
+    root = bundle.resolve()
+    manifest_path = root / "registered_manifest.json"
+    if not manifest_path.is_file():
+        raise OpenROADPhysicalError("registered bundle is missing registered_manifest.json")
+    manifest = _load_json(manifest_path)
+    if manifest.get("schema") != "hephaestus.registered-matched-tiles.v1":
+        raise OpenROADPhysicalError("unsupported registered matched-tile schema")
+
+    claims = manifest.get("claims")
+    required_true = (
+        "source_matched_integer_contract_verified",
+        "source_exhaustive_combinational_equivalence_verified",
+        "source_formal_negative_control_counterexample_found",
+        "registered_streaming_interface_generated",
+        "registered_backends_match_oracle_on_executed_schedule",
+        "one_cycle_latency_verified_on_executed_schedule",
+        "initiation_interval_one_verified_on_executed_schedule",
+        "reset_flush_verified_on_executed_schedule",
+        "simulation_negative_control_detected",
+    )
+    if not isinstance(claims, dict) or any(claims.get(name) is not True for name in required_true):
+        raise OpenROADPhysicalError("registered source evidence is not fully qualified")
+    if claims.get("sequential_formal_equivalence_verified") is not False:
+        raise OpenROADPhysicalError("registered source overstates sequential formal evidence")
+
+    contract = manifest.get("contract")
+    if not isinstance(contract, dict):
+        raise OpenROADPhysicalError("registered source contract is malformed")
+    expected_contract = {
+        "latency_cycles": 1,
+        "valid_latency_cycles": 1,
+        "initiation_interval_cycles": 1,
+        "clock_edge": "rising",
+        "reset_style": "synchronous_active_high",
+        "reset_clears_pipeline": True,
+        "input_registered": True,
+        "output_registered": True,
+        "combinational_core_preserved": True,
+        "runtime_coefficient_reads_per_matvec": 0,
+    }
+    if any(contract.get(key) != value for key, value in expected_contract.items()):
+        raise OpenROADPhysicalError("registered source contract differs from the physical boundary")
+
+    backend_specs = manifest.get("backends")
+    if not isinstance(backend_specs, dict) or set(backend_specs) != set(BACKENDS):
+        raise OpenROADPhysicalError("registered source must contain exactly three matched backends")
+    paths: dict[str, tuple[Path, Path]] = {}
+    for backend in BACKENDS:
+        specification = backend_specs[backend]
+        if not isinstance(specification, dict):
+            raise OpenROADPhysicalError(f"registered backend {backend} is malformed")
+        _safe_module(specification.get("core_module"), context=f"{backend}.core_module")
+        _safe_module(specification.get("wrapper_module"), context=f"{backend}.wrapper_module")
+        if specification.get("runtime_coefficient_reads_per_matvec") != 0:
+            raise OpenROADPhysicalError(f"registered backend {backend} is not zero-fetch")
+        core = _resolve_artifact(
+            root,
+            specification.get("core_rtl"),
+            specification.get("core_sha256"),
+            context=f"{backend}.core_rtl",
+        )
+        wrapper = _resolve_artifact(
+            root,
+            specification.get("wrapper_rtl"),
+            specification.get("wrapper_sha256"),
+            context=f"{backend}.wrapper_rtl",
+        )
+        paths[backend] = (core, wrapper)
+    return manifest, paths
