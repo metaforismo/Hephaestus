@@ -1,0 +1,170 @@
+name: OpenSTA timing evidence
+
+on:
+  push:
+    branches:
+      - main
+      - feat/opensta-timing-evidence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  combinational-timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install mapping and timing tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            'iverilog=12.0-2build2' \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2' \
+            opensta
+          mkdir -p build/opensta-timing/tooling
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            opensta yosys yosys-abc iverilog \
+            | sort \
+            | tee build/opensta-timing/tooling/packages.tsv
+          command -v sta | tee build/opensta-timing/tooling/sta.path.txt
+          sta -version | tee build/opensta-timing/tooling/sta.version.txt
+          yosys -V | tee build/opensta-timing/tooling/yosys.version.txt
+      - name: Install Hephaestus
+        run: python -m pip install -e '.[dev]'
+      - name: Lint and test timing evidence
+        run: |
+          ruff check src/hephaestus/timing.py tests/test_timing.py
+          ruff format --check src/hephaestus/timing.py tests/test_timing.py
+          pytest tests/test_timing.py
+      - name: Fetch and verify the pinned IHP Liberty
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path(
+                  'configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json'
+              ).read_text(encoding='utf-8')
+          )
+          root = Path('build/opensta-timing/input')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'url.txt').write_text(
+              config['source']['url'] + '\n', encoding='utf-8'
+          )
+          (root / 'sha256.txt').write_text(
+              config['library']['sha256'] + '\n', encoding='utf-8'
+          )
+          PY
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$(cat build/opensta-timing/input/url.txt)" \
+            --output build/opensta-timing/input/technology.lib
+          printf '%s  %s\n' \
+            "$(cat build/opensta-timing/input/sha256.txt)" \
+            build/opensta-timing/input/technology.lib \
+            | sha256sum --check --strict
+      - name: Build matched and mapped backends
+        run: |
+          python -m hephaestus compile examples/tiny_weights.json \
+            --out build/opensta-timing/source \
+            --module hephaestus_opensta_source \
+            --verify-samples 256
+          python -m hephaestus.baselines build/opensta-timing/source \
+            --out build/opensta-timing/matched \
+            --module hephaestus_opensta \
+            --verify-vectors 256 \
+            --seed 43 \
+            --simulate
+          python -m hephaestus.mapped build/opensta-timing/matched \
+            --technology configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json \
+            --liberty build/opensta-timing/input/technology.lib \
+            --out build/opensta-timing/mapped \
+            --verify-repeatability \
+            --timeout 300
+      - name: Prove the mapped netlists before timing them
+        run: |
+          python -m hephaestus.mapped_formal build/opensta-timing/mapped \
+            --codes build/opensta-timing/source/codes.npy \
+            --out build/opensta-timing/mapped-formal \
+            --max-input-bits 64 \
+            --timeout 300
+      - name: Run the matched OpenSTA timing contract twice
+        run: |
+          python -m hephaestus.timing build/opensta-timing/mapped \
+            --mapped-formal build/opensta-timing/mapped-formal \
+            --contract configs/timing/ihp_sg13g2_combinational_typ_v1.json \
+            --out build/opensta-timing/timing \
+            --verify-repeatability \
+            --timeout 300
+      - name: Validate timing evidence and claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('build/opensta-timing')
+          evidence = json.loads(
+              (root / 'timing' / 'timing_evidence.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert evidence['schema'] == (
+              'hephaestus.opensta-combinational-timing-evidence.v1'
+          )
+          assert evidence['evidence_level'] == (
+              'opensta_standard_cell_combinational_timing_estimate'
+          )
+          assert evidence['technology']['technology_id'] == (
+              'ihp-sg13g2-stdcell-typ-1p20v-25c'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['metrics']['reported_path_count'] > 0
+              and backend['metrics']['worst_data_arrival_ns'] > 0
+              and backend['metrics']['unconstrained_paths_found'] is False
+              and backend['repeatability']['passed'] is True
+              and backend['repeatability']['normalized_metrics_identical'] is True
+              for backend in evidence['backends'].values()
+          )
+          assert evidence['claims'] == {
+              'matched_integer_contract_verified': True,
+              'standard_cell_mapping_performed': True,
+              'mapped_netlist_structurally_checked': True,
+              'mapped_gate_level_equivalence_verified': True,
+              'combinational_timing_constraints_applied': True,
+              'opensta_timing_analysis_completed': True,
+              'unconstrained_paths_found': False,
+              'timing_repeatability_verified': True,
+              'critical_path_delay_estimated': True,
+              'sequential_equivalence_verified': False,
+              'timing_closed': False,
+              'power_estimated': False,
+              'placement_performed': False,
+              'routing_performed': False,
+              'post_synthesis_ppa_measured': False,
+              'post_layout_pex_verified': False,
+              'silicon_verified': False,
+          }
+          assert (root / 'timing' / 'technology' / 'technology.lib').is_file()
+          assert (root / 'timing' / 'timing_contract.json').is_file()
+          PY
+      - name: Upload complete timing evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-sg13g2-opensta-timing-evidence
+          path: build/opensta-timing
+          if-no-files-found: error
+          retention-days: 30
