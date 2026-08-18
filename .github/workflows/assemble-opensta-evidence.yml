@@ -4,13 +4,17 @@ on:
   push:
     branches:
       - feat/opensta-timing-evidence
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   assemble:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.head_ref == 'feat/opensta-timing-evidence')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
