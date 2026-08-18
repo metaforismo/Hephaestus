@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from hephaestus.openroad_physical import (
+    BACKENDS,
+    OpenROADPhysicalError,
+    bind_openroad_results,
+    canonical_gds_sha256,
+    emit_config_mk,
+    emit_sdc,
+    load_physical_config,
+    normalized_spef_sha256,
+    prepare_openroad_designs,
+)
+from hephaestus.report import sha256_file
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _record(record_type: int, data_type: int, payload: bytes = b"") -> bytes:
+    length = 4 + len(payload)
+    if length % 2:
+        payload += b"\x00"
+        length += 1
+    return length.to_bytes(2, "big") + bytes((record_type, data_type)) + payload
+
+
+def _gds(timestamp: int, geometry_byte: int) -> bytes:
+    timestamps = b"".join(timestamp.to_bytes(2, "big") for _ in range(12))
+    return b"".join(
+        [
+            _record(0x00, 0x02, b"\x02\x58"),
+            _record(0x01, 0x02, timestamps),
+            _record(0x02, 0x06, b"HEPHAESTUS"),
+            _record(0x05, 0x02, timestamps),
+            _record(0x06, 0x06, b"TOP"),
+            _record(0x08, 0x00),
+            _record(0x0D, 0x02, b"\x00\x01"),
+            _record(0x0E, 0x02, b"\x00\x00"),
+            _record(0x10, 0x03, bytes([geometry_byte]) * 8),
+            _record(0x11, 0x00),
+            _record(0x07, 0x00),
+            _record(0x04, 0x00),
+        ]
+    )
+
+
+def _config() -> dict[str, object]:
+    image = "openroad/orfs@sha256:" + "1" * 64
+    return {
+        "schema": "hephaestus.openroad-physical-config.v1",
+        "config_id": "ihp-sg13g2-openroad-registered-tiny-v1",
+        "research_probe": {
+            "qualified": True,
+            "source_head_sha": "2" * 40,
+            "workflow_run_id": 1234,
+            "artifact_digest": "sha256:" + "3" * 64,
+            "probe_manifest_sha256": "4" * 64,
+        },
+        "toolchain": {
+            "docker_image": image,
+            "docker_repo_digest": image,
+            "orfs_git_head": "5" * 40,
+            "captured_versions": [
+                "openroad=OpenROAD v2",
+                "yosys=Yosys 0.33",
+                "klayout=KLayout 0.29",
+            ],
+        },
+        "platform": "ihp-sg13g2",
+        "clock": {
+            "port": "clk",
+            "period_ns": 4.0,
+            "uncertainty_ns": 0.05,
+            "transition_ns": 0.05,
+        },
+        "io": {
+            "input_delay_ns": 0.0,
+            "output_delay_ns": 0.0,
+            "input_driver_cell": "sg13g2_buf_4",
+            "output_load_pf": 0.01,
+        },
+        "floorplan": {
+            "die_area_um": [0.0, 0.0, 250.0, 250.0],
+            "core_area_um": [20.0, 20.0, 230.0, 230.0],
+            "place_density": 0.35,
+        },
+        "routing": {
+            "minimum_layer": "Metal2",
+            "maximum_layer": "Metal5",
+        },
+        "execution": {
+            "attempts_per_backend": 2,
+            "timeout_minutes": 90,
+            "flow_variant": "base",
+            "design_nickname_prefix": "hephaestus_registered_tiny",
+            "required_outputs": {
+                "final_gds": "6_final.gds",
+                "final_def": "6_final.def",
+                "final_verilog": "6_final.v",
+                "final_open_db": "6_final.odb",
+                "final_spef": "6_final.spef",
+            },
+        },
+    }
+
+
+def _registered_bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "registered"
+    bundle.mkdir()
+    backends: dict[str, object] = {}
+    artifact_sha256: dict[str, str] = {}
+    for backend in BACKENDS:
+        core = bundle / f"{backend}_core.sv"
+        wrapper = bundle / f"{backend}_registered.sv"
+        core.write_text(
+            f"module {backend}_core(input [7:0] x_flat, output [7:0] y_flat); "
+            "assign y_flat = x_flat; endmodule\n",
+            encoding="utf-8",
+        )
+        wrapper.write_text(
+            f"module tile_{backend}_registered(input clk, input reset, input valid_in, "
+            "input [7:0] x_flat, output reg valid_out, output reg [7:0] y_flat); "
+            "always @(posedge clk) begin if (reset) begin valid_out <= 0; y_flat <= 0; "
+            "end else begin valid_out <= valid_in; y_flat <= x_flat; end end endmodule\n",
+            encoding="utf-8",
+        )
+        backends[backend] = {
+            "core_module": f"{backend}_core",
+            "wrapper_module": f"tile_{backend}_registered",
+            "core_rtl": core.name,
+            "wrapper_rtl": wrapper.name,
+            "core_sha256": sha256_file(core),
+            "wrapper_sha256": sha256_file(wrapper),
+            "runtime_coefficient_reads_per_matvec": 0,
+        }
+        artifact_sha256[f"{backend}_core"] = sha256_file(core)
+        artifact_sha256[f"{backend}_wrapper"] = sha256_file(wrapper)
+    _write_json(
+        bundle / "registered_manifest.json",
+        {
+            "schema": "hephaestus.registered-matched-tiles.v1",
+            "source": {},
+            "contract": {
+                "domain": "quantized_integer_core_before_row_scaling",
+                "input_count": 1,
+                "output_count": 1,
+                "input_width": 8,
+                "accumulator_width": 8,
+                "input_bits": 8,
+                "output_bits": 8,
+                "latency_cycles": 1,
+                "valid_latency_cycles": 1,
+                "initiation_interval_cycles": 1,
+                "clock_edge": "rising",
+                "reset_style": "synchronous_active_high",
+                "reset_clears_pipeline": True,
+                "input_registered": True,
+                "output_registered": True,
+                "combinational_core_preserved": True,
+                "runtime_coefficient_reads_per_matvec": 0,
+            },
+            "backends": backends,
+            "artifact_sha256": artifact_sha256,
+            "claims": {
+                "source_matched_integer_contract_verified": True,
+                "source_exhaustive_combinational_equivalence_verified": True,
+                "source_formal_negative_control_counterexample_found": True,
+                "registered_streaming_interface_generated": True,
+                "registered_backends_match_oracle_on_executed_schedule": True,
+                "one_cycle_latency_verified_on_executed_schedule": True,
+                "initiation_interval_one_verified_on_executed_schedule": True,
+                "reset_flush_verified_on_executed_schedule": True,
+                "simulation_negative_control_detected": True,
+                "sequential_formal_equivalence_verified": False,
+            },
+        },
+    )
+    return bundle
