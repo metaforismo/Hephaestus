@@ -1,0 +1,223 @@
+name: Collect successful OpenROAD registered shared-DAG probe
+
+on:
+  push:
+    branches:
+      - research/openroad-registered-shared-probe
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  collect:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/openroad-registered-shared-probe
+          fetch-depth: 1
+
+      - name: Wait for the exact-head research probe
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          head_sha = os.environ['GITHUB_SHA']
+          target_name = 'Research OpenROAD registered shared-DAG probe'
+          deadline = time.time() + 90 * 60
+          selected = None
+
+          while time.time() < deadline:
+              completed = subprocess.run(
+                  [
+                      'gh',
+                      'api',
+                      f'repos/{repository}/actions/runs',
+                      '-f',
+                      f'head_sha={head_sha}',
+                      '-f',
+                      'event=push',
+                      '-f',
+                      'per_page=100',
+                  ],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              runs = json.loads(completed.stdout)['workflow_runs']
+              candidates = [
+                  run
+                  for run in runs
+                  if run['name'] == target_name and run['head_sha'] == head_sha
+              ]
+              if candidates:
+                  selected = max(candidates, key=lambda run: run['id'])
+                  print(
+                      f"probe run {selected['id']}: "
+                      f"{selected['status']} / {selected['conclusion']}",
+                      flush=True,
+                  )
+                  if selected['status'] == 'completed':
+                      break
+              time.sleep(20)
+          else:
+              raise SystemExit('timed out waiting for the exact-head ORFS probe')
+
+          if selected is None or selected['conclusion'] != 'success':
+              conclusion = None if selected is None else selected['conclusion']
+              raise SystemExit(f'ORFS probe did not succeed: {conclusion}')
+
+          Path('build').mkdir(exist_ok=True)
+          Path('build/probe-run.json').write_text(
+              json.dumps(selected, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          Path('build/probe-run-id.txt').write_text(
+              f"{selected['id']}\n",
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Download and validate the successful probe artifact
+        run: |
+          set -euo pipefail
+          run_id=$(cat build/probe-run-id.txt)
+          mkdir -p build/collected
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-openroad-registered-shared-probe \
+            --dir build/collected
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          run = json.loads(Path('build/probe-run.json').read_text(encoding='utf-8'))
+          artifact_response = subprocess.run(
+              [
+                  'gh',
+                  'api',
+                  f"repos/{repository}/actions/runs/{run['id']}/artifacts",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          artifacts = json.loads(artifact_response.stdout)['artifacts']
+          matching = [
+              artifact
+              for artifact in artifacts
+              if artifact['name'] == 'hephaestus-openroad-registered-shared-probe'
+          ]
+          if len(matching) != 1:
+              raise SystemExit(f'expected one probe artifact, found {len(matching)}')
+          artifact = matching[0]
+
+          root = Path('build/collected')
+          manifest_path = root / 'openroad_probe_manifest.json'
+          if not manifest_path.is_file():
+              candidates = list(root.rglob('openroad_probe_manifest.json'))
+              if len(candidates) != 1:
+                  raise SystemExit('probe artifact has no unique manifest')
+              manifest_path = candidates[0]
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          expected_claims = {
+              'registered_source_bound_by_digest': True,
+              'openroad_flow_completed': True,
+              'placement_performed': True,
+              'routing_performed': True,
+              'routed_gds_generated': True,
+              'routed_def_generated': True,
+              'routed_open_db_generated': True,
+              'spef_generated': True,
+              'matched_three_backend_physical_comparison_performed': False,
+              'post_physical_equivalence_verified': False,
+              'independent_drc_verified': False,
+              'lvs_clean': False,
+              'activity_based_power_estimated': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          if manifest.get('schema') != 'hephaestus.openroad-registered-shared-probe.v1':
+              raise SystemExit('unexpected probe manifest schema')
+          if manifest.get('claims') != expected_claims:
+              raise SystemExit('probe claim boundary drifted')
+          required = {
+              'final_gds',
+              'final_def',
+              'final_verilog',
+              'final_open_db',
+              'final_spef',
+          }
+          if set(manifest.get('artifacts', {})) != required:
+              raise SystemExit('probe output set is incomplete or unexpected')
+          for label, specification in manifest['artifacts'].items():
+              if specification['size_bytes'] <= 0:
+                  raise SystemExit(f'empty physical output: {label}')
+              digest = specification['sha256']
+              if not isinstance(digest, str) or len(digest) != 64:
+                  raise SystemExit(f'invalid physical digest: {label}')
+
+          manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          result = {
+              'schema': 'hephaestus.openroad-registered-shared-probe-result.v1',
+              'source_head_sha': run['head_sha'],
+              'workflow_run_id': run['id'],
+              'workflow_url': run['html_url'],
+              'artifact': {
+                  'id': artifact['id'],
+                  'name': artifact['name'],
+                  'size_in_bytes': artifact['size_in_bytes'],
+                  'digest': artifact.get('digest'),
+                  'expires_at': artifact['expires_at'],
+              },
+              'probe_manifest_sha256': manifest_digest,
+              'probe': manifest,
+              'promotion_status': {
+                  'research_probe_succeeded': True,
+                  'permanent_evidence_implemented': False,
+                  'matched_three_backend_flow_completed': False,
+              },
+          }
+          output = Path('research/openroad_registered_shared_probe_result.json')
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Preserve the qualified result and remove research automation
+        run: |
+          set -euo pipefail
+          rm .github/workflows/research-openroad-registered-shared-probe.yml
+          rm .github/workflows/research-openroad-registered-shared-collector.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Record the qualified registered OpenROAD research probe'
+          git push origin HEAD:research/openroad-registered-shared-probe
