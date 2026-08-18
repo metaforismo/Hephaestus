@@ -136,7 +136,7 @@ jobs:
             --tool-metadata build/opensta-evidence/tooling/tool.json \
             --attempts 2 \
             --timeout 300
-      - name: Bind timing to the exact formal proofs
+      - name: Bind timing to exact formal proofs and regression reference
         run: |
           python -m hephaestus.opensta_binding \
             build/opensta-evidence/formal/abc_area_delay_formal_evidence.json \
@@ -151,7 +151,23 @@ jobs:
           binding = json.loads(
               (root / 'opensta_formal_binding.json').read_text(encoding='utf-8')
           )
+          reference = json.loads(
+              Path(
+                  'benchmarks/reference/'
+                  'ihp_sg13g2_opensta_formal_timing_tiny_v1.json'
+              ).read_text(encoding='utf-8')
+          )
+
           assert binding['schema'] == 'hephaestus.opensta-formal-binding.v1'
+          assert binding['evidence_level'] == (
+              'opensta_pre_layout_timing_of_formally_proved_abc_netlists'
+          )
+          assert reference['schema'] == (
+              'hephaestus.opensta-formal-timing-reference.v1'
+          )
+          assert reference['reference_id'] == (
+              'ihp-sg13g2-opensta-formal-timing-tiny-v1'
+          )
           assert binding['scope'] == {
               'backends': [
                   'shared_dag',
@@ -164,27 +180,70 @@ jobs:
               'sequential_depth': 0,
               'parasitics_annotated': False,
           }
-          assert len(binding['results']) == 6
-          for result in binding['results']:
+          assert reference['case']['input_bits'] == 48
+          assert reference['case']['output_bits'] == 48
+          assert reference['case']['source_sweep_runs'] == 18
+          assert binding['technology']['technology_id'] == (
+              reference['technology']['technology_id']
+          )
+          assert binding['technology']['liberty']['sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          assert binding['source']['liberty_sha256'] == (
+              reference['technology']['liberty_sha256']
+          )
+          assert binding['source']['abc_area_delay_evidence_sha256'] == (
+              reference['source_evidence'][
+                  'abc_area_delay_evidence_sha256'
+              ]
+          )
+          assert binding['tool']['repository'] == reference['tool']['repository']
+          assert binding['tool']['commit'] == reference['tool']['commit']
+          assert binding['tool']['banner'].startswith(
+              reference['tool']['version_prefix']
+          )
+          assert binding['tool']['binary_reproducibility_verified'] is False
+          assert binding['timing_contract'] == reference['timing_contract']
+          assert binding['claims'] == reference['claim_boundary']
+
+          expected = {
+              (backend, label): values
+              for backend, backend_data in reference['expected'].items()
+              for label, values in backend_data['labels'].items()
+          }
+          actual = {
+              (result['backend'], result['label']): result
+              for result in binding['results']
+          }
+          assert set(actual) == set(expected)
+          assert len(
+              {result['mapped_verilog_sha256'] for result in actual.values()}
+          ) == 6
+
+          for pair, pinned in expected.items():
+              result = actual[pair]
+              assert result['mapped_verilog_sha256'] == (
+                  pinned['mapped_verilog_sha256']
+              )
+              assert result['formal_proof_representative'] == (
+                  pinned['formal_proof_representative']
+              )
+              assert result['attempts'] == pinned['attempts']
               assert result['formal_equivalence_verified']
               assert result['timing_repeatability_verified']
-              assert result['attempts'] == 2
-              assert math.isfinite(result['opensta_data_delay_ns'])
-              assert result['opensta_data_delay_ns'] > 0
-          assert binding['claims'] == {
-              'all_timed_netlists_formally_equivalent': True,
-              'formal_negative_control_counterexample_found': True,
-              'opensta_pre_layout_timing_analyzed': True,
-              'timing_repeatability_verified': True,
-              'signoff_sta_performed': False,
-              'timing_closed': False,
-              'parasitics_annotated': False,
-              'placement_performed': False,
-              'routing_performed': False,
-              'power_estimated': False,
-              'post_layout_pex_verified': False,
-              'silicon_verified': False,
-          }
+              for metric, tolerance in (
+                  ('abc_library_area', 1e-6),
+                  ('abc_delay_picoseconds', 1e-6),
+                  ('opensta_data_delay_ns', 1e-9),
+                  ('worst_slack_ns', 1e-9),
+                  ('total_negative_slack_ns', 1e-9),
+              ):
+                  assert math.isclose(
+                      result[metric],
+                      pinned[metric],
+                      rel_tol=0,
+                      abs_tol=tolerance,
+                  )
           PY
       - name: Upload complete formally bound timing evidence
         uses: actions/upload-artifact@v4
