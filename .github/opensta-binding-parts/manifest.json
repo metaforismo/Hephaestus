@@ -3,8 +3,8 @@
   "files": {
     "module": {
       "target": "src/hephaestus/opensta_binding.py",
-      "bytes": 14093,
-      "sha256": "94934383436abaf60faff65ae0be7f1ca48502b7629c017673f1e420980b57c4",
+      "bytes": 14160,
+      "sha256": "539dc3e23de82e6fde72b5bce54102e4b2edc90623ce1e0f4fb7856dcd5f4971",
       "parts": [
         "module.part00",
         "module.part01",
