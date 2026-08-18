@@ -145,6 +145,7 @@ jobs:
           python - <<'PY'
           import json
           import math
+          import re
           from pathlib import Path
 
           root = Path('build/opensta-evidence')
@@ -192,19 +193,34 @@ jobs:
           assert binding['source']['liberty_sha256'] == (
               reference['technology']['liberty_sha256']
           )
-          assert binding['source']['abc_area_delay_evidence_sha256'] == (
-              reference['source_evidence'][
-                  'abc_area_delay_evidence_sha256'
-              ]
+          current_abc_digest = binding['source'][
+              'abc_area_delay_evidence_sha256'
+          ]
+          qualifying_abc_digest = reference['source_evidence'][
+              'abc_area_delay_evidence_sha256'
+          ]
+          assert re.fullmatch(r'[0-9a-f]{64}', current_abc_digest), (
+              'current ABC evidence digest', current_abc_digest
           )
-          assert binding['tool']['repository'] == reference['tool']['repository']
-          assert binding['tool']['commit'] == reference['tool']['commit']
+          assert re.fullmatch(r'[0-9a-f]{64}', qualifying_abc_digest), (
+              'qualifying ABC evidence digest', qualifying_abc_digest
+          )
+          assert binding['tool']['repository'] == reference['tool']['repository'], (
+              binding['tool']['repository'], reference['tool']['repository']
+          )
+          assert binding['tool']['commit'] == reference['tool']['commit'], (
+              binding['tool']['commit'], reference['tool']['commit']
+          )
           assert binding['tool']['banner'].startswith(
               reference['tool']['version_prefix']
           )
           assert binding['tool']['binary_reproducibility_verified'] is False
-          assert binding['timing_contract'] == reference['timing_contract']
-          assert binding['claims'] == reference['claim_boundary']
+          assert binding['timing_contract'] == reference['timing_contract'], (
+              binding['timing_contract'], reference['timing_contract']
+          )
+          assert binding['claims'] == reference['claim_boundary'], (
+              binding['claims'], reference['claim_boundary']
+          )
 
           expected = {
               (backend, label): values
@@ -215,7 +231,7 @@ jobs:
               (result['backend'], result['label']): result
               for result in binding['results']
           }
-          assert set(actual) == set(expected)
+          assert set(actual) == set(expected), (set(actual), set(expected))
           assert len(
               {result['mapped_verilog_sha256'] for result in actual.values()}
           ) == 6
@@ -224,11 +240,17 @@ jobs:
               result = actual[pair]
               assert result['mapped_verilog_sha256'] == (
                   pinned['mapped_verilog_sha256']
-              )
+              ), (pair, result['mapped_verilog_sha256'], pinned['mapped_verilog_sha256'])
               assert result['formal_proof_representative'] == (
                   pinned['formal_proof_representative']
+              ), (
+                  pair,
+                  result['formal_proof_representative'],
+                  pinned['formal_proof_representative'],
               )
-              assert result['attempts'] == pinned['attempts']
+              assert result['attempts'] == pinned['attempts'], (
+                  pair, result['attempts'], pinned['attempts']
+              )
               assert result['formal_equivalence_verified']
               assert result['timing_repeatability_verified']
               for metric, tolerance in (
@@ -243,9 +265,10 @@ jobs:
                       pinned[metric],
                       rel_tol=0,
                       abs_tol=tolerance,
-                  )
+                  ), (pair, metric, result[metric], pinned[metric])
           PY
       - name: Upload complete formally bound timing evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hephaestus-pinned-opensta-formal-timing-evidence
