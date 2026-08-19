@@ -31,14 +31,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p src/hephaestus tests
-          base64 --decode \
-            .github/openroad-physical-payload/openroad_physical.py.gz.b64 \
+          cat .github/openroad-materialize/src_*.b64 \
+            | base64 --decode \
             | gzip --decompress \
             > src/hephaestus/openroad_physical.py
-          base64 --decode \
-            .github/openroad-physical-payload/test_openroad_physical.py.gz.b64 \
+          cat .github/openroad-materialize/test_*.b64 \
+            | base64 --decode \
             | gzip --decompress \
             > tests/test_openroad_physical.py
+          printf '%s  %s\n' \
+            d57dc89f919a2e02501198d0152fa1c62eaf873de755b525a2591ef399a7126e \
+            src/hephaestus/openroad_physical.py \
+            | sha256sum --check --strict
+          printf '%s  %s\n' \
+            d9833aaf308e1c1e9dc763b027c145e9f0821fe174e73c0b07b41b3eb2a49ccc \
+            tests/test_openroad_physical.py \
+            | sha256sum --check --strict
 
       - name: Import the qualified shared-DAG smoke boundary
         run: |
@@ -90,6 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf \
+            .github/openroad-materialize \
             .github/openroad-physical-parts \
             .github/openroad-physical-payload
 
@@ -98,12 +107,13 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
+          git add -A -- \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
             configs/physical/ihp_sg13g2_openroad_registered_v1.json \
             benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
             flows/openroad/registered_shared_dag \
+            .github/openroad-materialize \
             .github/openroad-physical-parts \
             .github/openroad-physical-payload
           git commit -m 'Materialize matched OpenROAD physical evidence source'
