@@ -1,5 +1,0 @@
-
-# ORFS names worst setup/hold slack as `finish__timing__...__ws` rather than
-# using a literal `slack`/`wns` token. Runtime and environment noise is still
-# rejected first by `_UNSTABLE_METRIC_WORDS`.
-_STABLE_METRIC_WORDS = (*_STABLE_METRIC_WORDS, "timing")
