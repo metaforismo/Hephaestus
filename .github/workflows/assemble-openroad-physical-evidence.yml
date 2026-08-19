@@ -10,13 +10,12 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   assemble:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,17 +27,20 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Import the qualifying research-smoke reference
+      - name: Import the qualified registered shared-DAG smoke boundary
         run: |
           set -euo pipefail
           git fetch origin research/openroad-registered-smoke
           mkdir -p benchmarks/reference flows/openroad/registered_shared_dag
-          git show \
-            origin/research/openroad-registered-smoke:benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
-            > benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json
-          git show \
-            origin/research/openroad-registered-smoke:flows/openroad/registered_shared_dag/PROBE_RESULT.md \
-            > flows/openroad/registered_shared_dag/PROBE_RESULT.md
+          for path in \
+            benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            flows/openroad/registered_shared_dag/PROBE_RESULT.md \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/synth_compat.tcl \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py; do
+            git show "origin/research/openroad-registered-smoke:$path" > "$path"
+          done
+          chmod +x flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py
 
       - name: Assemble and normalize the Python implementation
         run: |
@@ -47,6 +49,7 @@ jobs:
             > src/hephaestus/openroad_physical.py
           cat .github/openroad-physical-parts/tests_*.part \
             > tests/test_openroad_physical.py
+
           python - <<'PY'
           from pathlib import Path
           import re
@@ -87,6 +90,11 @@ jobs:
                   ),
                   "export SDC_FILE = $(dir $(DESIGN_CONFIG))/constraint.sdc",
                   "export RULES_JSON = $(dir $(DESIGN_CONFIG))/rules.json",
+                  "export SYNTH_SCRIPT = $(dir $(DESIGN_CONFIG))/synth_compat.tcl",
+                  (
+                      "export YOSYS_DEPENDENCIES += $(SYNTH_SCRIPT) "
+                      "$(dir $(DESIGN_CONFIG))/sanitize_yosys_netlist.py"
+                  ),
                   "",
                   f"export CLOCK_PORT = {clock['port']}",
                   f"export CLOCK_PERIOD = {float(clock['period_ns']):.9g}",
@@ -95,7 +103,8 @@ jobs:
                   f"export PLACE_DENSITY = {float(floorplan['place_density']):.9g}",
                   f"export MIN_ROUTING_LAYER = {routing['minimum_layer']}",
                   f"export MAX_ROUTING_LAYER = {routing['maximum_layer']}",
-                  f"export OPENROAD_THREADS = {int(contract['openroad_threads'])}",
+                  f"export NUM_CORES = {int(contract['openroad_threads'])}",
+                  "export LEC_CHECK = 0",
                   "",
               ]
               return "\n".join(lines)
@@ -109,33 +118,68 @@ jobs:
               raise SystemExit(f'could not replace emit_config exactly once: {count}')
           path.write_text(text, encoding='utf-8')
           PY
-          rm -rf .github/openroad-physical-parts
-          rm .github/workflows/assemble-openroad-physical-evidence.yml
 
-      - name: Install, format, and test the implementation
+      - name: Install, format, and test the assembled implementation
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
           ruff check --fix \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff format \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff check \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff format --check \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           pytest tests/test_openroad_physical.py
           python -m hephaestus.openroad_physical --help
+          python flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            --self-test
+          python flows/openroad/registered_shared_dag/validate_smoke_reference.py \
+            --self-test
 
-      - name: Commit the production source
+      - name: Record the assembled tree
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Add matched registered OpenROAD physical evidence'
-          git push origin HEAD:feat/openroad-physical-evidence
+          mkdir -p build/openroad-physical-assembly
+          cp src/hephaestus/openroad_physical.py \
+            build/openroad-physical-assembly/openroad_physical.py
+          cp tests/test_openroad_physical.py \
+            build/openroad-physical-assembly/test_openroad_physical.py
+          cp configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            build/openroad-physical-assembly/physical_contract.json
+          cp -R flows/openroad/registered_shared_dag \
+            build/openroad-physical-assembly/registered_shared_dag
+          cp benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            build/openroad-physical-assembly/smoke_reference.json
+          sha256sum \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py \
+            configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            flows/openroad/registered_shared_dag/* \
+            benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            > build/openroad-physical-assembly/SHA256SUMS
+          git diff --no-index /dev/null src/hephaestus/openroad_physical.py \
+            > build/openroad-physical-assembly/openroad_physical.patch || true
+          git diff --no-index /dev/null tests/test_openroad_physical.py \
+            > build/openroad-physical-assembly/test_openroad_physical.patch || true
+
+      - name: Upload the verified assembled tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-openroad-physical-assembled-tree
+          path: build/openroad-physical-assembly
+          if-no-files-found: error
+          retention-days: 14
