@@ -46,14 +46,17 @@ jobs:
           index = matches[0]
           if index == 0 or 'smoke_source = probe_reference["source"]' not in lines[index - 1]:
               raise SystemExit('registered-manifest check is outside the smoke-source block')
-          if 'raise OpenROADPhysicalError' not in lines[index + 1]:
-              raise SystemExit('registered-manifest check has an unexpected body')
-          if 'registered manifest differs from the qualifying smoke run' not in lines[index + 2]:
-              raise SystemExit('registered-manifest error message changed unexpectedly')
-          if lines[index + 3].strip() != ')':
-              raise SystemExit('registered-manifest check has an unexpected terminator')
+          expected_raise = (
+              'raise OpenROADPhysicalError('
+              '"registered manifest differs from the qualifying smoke run")'
+          )
+          if lines[index + 1].strip() != expected_raise:
+              raise SystemExit(
+                  'registered-manifest error body changed unexpectedly: '
+                  + lines[index + 1].strip()
+              )
           indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
-          lines[index : index + 4] = [
+          lines[index : index + 2] = [
               indent
               + '# The full smoke manifest hash is qualifying-run provenance. It includes',
               indent
