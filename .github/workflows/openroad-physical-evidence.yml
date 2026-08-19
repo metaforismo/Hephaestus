@@ -39,12 +39,20 @@ jobs:
           python -m pip install -e '.[dev]'
           ruff check \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff format --check \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           pytest tests/test_openroad_physical.py
           python -m hephaestus.openroad_physical --help
+          python flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            --self-test
+          python flows/openroad/registered_shared_dag/validate_smoke_reference.py \
+            --self-test
 
       - name: Rebuild the exact registered source evidence
         run: |
@@ -83,6 +91,7 @@ jobs:
               benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
             --contract \
               configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            --flow-helpers flows/openroad/registered_shared_dag \
             --out build/openroad-physical/prepared
 
       - name: Validate the prepared claim boundary
@@ -102,6 +111,11 @@ jobs:
           assert evidence['contract']['value']['attempts_per_backend'] == 2
           assert evidence['toolchain']['orfs_image_repo_digest'].startswith(
               'openroad/orfs@sha256:'
+          )
+          assert all(
+              backend['synth_compat_sha256']
+              and backend['sanitizer_sha256']
+              for backend in evidence['backends'].values()
           )
           assert evidence['claims'] == {
               'registered_source_binding_verified': True,
