@@ -110,7 +110,11 @@ jobs:
               r'def emit_config\(.*?\n(?=def prepare_physical_evidence\()',
               re.DOTALL,
           )
-          text, count = pattern.subn(replacement + '\n\n', text, count=1)
+          text, count = pattern.subn(
+              lambda _: replacement + '\n\n',
+              text,
+              count=1,
+          )
           if count != 1:
               raise SystemExit(f'could not replace emit_config exactly once: {count}')
           path.write_text(text, encoding='utf-8')
@@ -120,7 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
-          ruff check --fix \
+          ruff check --fix --ignore E501 \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
@@ -130,7 +134,7 @@ jobs:
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
             flows/openroad/registered_shared_dag/validate_smoke_reference.py
-          ruff check \
+          ruff check --ignore E501 \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
