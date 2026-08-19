@@ -76,7 +76,27 @@ jobs:
       - name: Install, format, and verify the permanent source
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/hephaestus/openroad_physical.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''            "It does not prove post-physical functional equivalence, DRC, LVS, activity-based power,",
+            "validated PEX, foundry sign-off, or fabricated silicon. Comparative PPA is deliberately",
+            "disabled until the routed netlists receive downstream equivalence evidence.",'''
+          new = '''            "It does not prove post-physical equivalence, DRC, LVS, or activity-based power.",
+            "It also does not prove validated PEX, foundry sign-off, or fabricated silicon.",
+            "Comparative PPA stays disabled until routed-netlist equivalence is proved.",'''
+          if old not in text:
+              raise SystemExit('claim-boundary prose did not match the hardened payload')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python -m pip install -e '.[dev]'
+          ruff format \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff check --fix \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
