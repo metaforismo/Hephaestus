@@ -33,25 +33,39 @@ jobs:
           from pathlib import Path
 
           source = Path('src/hephaestus/openroad_physical.py')
-          text = source.read_text(encoding='utf-8')
-          old = '''    smoke_source = probe_reference["source"]
-              if sha256_file(manifest_path) != smoke_source["registered_manifest_sha256"]:
-                  raise OpenROADPhysicalError(
-                      "registered manifest differs from the qualifying smoke run"
-                  )
-              shared = validated["shared_dag"]
-          '''.replace('          ', '')
-          new = '''    smoke_source = probe_reference["source"]
-              # The full smoke manifest hash is qualifying-run provenance. It includes
-              # upstream proof/log digests that can change while the registered contract,
-              # code matrix, cores, wrappers, oracle, and claim boundary remain identical.
-              # The pinned registered reference above is the stable semantic authority;
-              # every physical attempt is still bound to the exact current manifest hash.
-              shared = validated["shared_dag"]
-          '''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('registered-manifest equality block was not found exactly once')
-          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+          lines = source.read_text(encoding='utf-8').splitlines()
+          matches = [
+              index
+              for index, line in enumerate(lines)
+              if 'if sha256_file(manifest_path) != smoke_source[' in line
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  f'expected one registered-manifest equality check, found {len(matches)}'
+              )
+          index = matches[0]
+          if index == 0 or 'smoke_source = probe_reference["source"]' not in lines[index - 1]:
+              raise SystemExit('registered-manifest check is outside the smoke-source block')
+          if 'raise OpenROADPhysicalError' not in lines[index + 1]:
+              raise SystemExit('registered-manifest check has an unexpected body')
+          if 'registered manifest differs from the qualifying smoke run' not in lines[index + 2]:
+              raise SystemExit('registered-manifest error message changed unexpectedly')
+          if lines[index + 3].strip() != ')':
+              raise SystemExit('registered-manifest check has an unexpected terminator')
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines[index : index + 4] = [
+              indent
+              + '# The full smoke manifest hash is qualifying-run provenance. It includes',
+              indent
+              + '# proof/log digests that can change while the registered contract,',
+              indent
+              + '# cores, wrappers, oracle, and claim boundary remain identical.',
+              indent
+              + '# The pinned registered reference above is the stable authority;',
+              indent
+              + '# each physical attempt still binds the exact current manifest hash.',
+          ]
+          source.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
           tests = Path('tests/test_openroad_physical.py')
           text = tests.read_text(encoding='utf-8')
@@ -91,29 +105,6 @@ jobs:
           if 'test_prepare_accepts_manifest_provenance_drift' not in text:
               text = text.replace(f'def {marker}', test + f'def {marker}', 1)
           tests.write_text(text, encoding='utf-8')
-
-          docs = Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md')
-          text = docs.read_text(encoding='utf-8')
-          replacements = {
-              '- the exact registered manifest, shared-DAG core, and wrapper digests;': (
-                  '- the qualifying registered-manifest digest as run provenance and the exact '
-                  'shared-DAG core and wrapper digests;'
-              ),
-              'The permanent matched flow refuses to start when the current registered shared-DAG source differs\nfrom that qualifying smoke source or when any part of the physical contract drifts.': (
-                  'The permanent matched flow refuses to start when the stable registered contract, code/core/wrapper\n'
-                  'artifacts, shared-DAG smoke source, or any part of the physical contract drifts. The complete\n'
-                  'registered manifest is still hashed into each prepared bundle and physical run, but its hash is not\n'
-                  'used as a cross-run identity because it also contains proof-log provenance.'
-              ),
-              '- the exact registered-manifest and shared-DAG identities observed by the smoke run;': (
-                  '- the stable registered reference plus the exact shared-DAG identities observed by the smoke run;'
-              ),
-          }
-          for old_text, new_text in replacements.items():
-              if old_text not in text:
-                  raise SystemExit(f'documentation text was not found: {old_text!r}')
-              text = text.replace(old_text, new_text, 1)
-          docs.write_text(text, encoding='utf-8')
           PY
 
       - name: Format and verify the corrected implementation
@@ -138,7 +129,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py \
-            docs/OPENROAD_PHYSICAL_EVIDENCE.md
+            tests/test_openroad_physical.py
           git commit -m 'Bind physical runs to stable registered artifacts'
           git push origin HEAD:feat/openroad-physical-evidence
