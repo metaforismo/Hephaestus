@@ -24,14 +24,15 @@ Metal2–Metal5 routing boundary can complete on the IHP SG13G2 ORFS platform.
 
 The smoke reference pins:
 
-- the exact registered shared-DAG core and wrapper digests;
+- the exact registered manifest, shared-DAG core, and wrapper digests;
 - the official ORFS image `RepoDigest`, not the mutable `latest` tag;
-- the committed floorplan and timing boundary;
-- the final GDS, DEF, mapped Verilog, OpenDB, and SPEF observations;
+- the committed floorplan, timing, I/O, and routing boundary;
+- the exact compatibility-transform manifest used between Yosys and OpenSTA;
+- the final GDS, DEF, mapped Verilog, OpenDB, SPEF, and stable metric observations;
 - a claim boundary that remains explicitly single-backend and non-comparative.
 
 The permanent matched flow refuses to start when the current registered shared-DAG source differs
-from that qualifying smoke source or when the physical contract drifts.
+from that qualifying smoke source or when any part of the physical contract drifts.
 
 ## Common contract
 
@@ -60,13 +61,19 @@ die:                 0,0 → 240,240 µm
 core:                20,20 → 220,220 µm
 placement density:   0.50
 routing layers:      Metal2 → Metal5
-OpenROAD threads:    one
+ORFS NUM_CORES:      one
 attempts:            two per backend
+transactional LEC:   disabled and disclosed
 ```
 
 The fixed die and core dimensions matter. Allowing ORFS to resize each design from its synthesized
 area would give the three architectures different wire and congestion opportunities and would not
 be a matched physical comparison.
+
+ORFS's developer-only Kepler transactional LEC is deliberately disabled because the bundled binary
+terminated with `SIGILL` on the qualifying GitHub runner. This does not convert equivalence into an
+implicit assumption: post-physical sequential equivalence remains a separate mandatory evidence
+layer.
 
 ## Preparation gate
 
@@ -75,14 +82,16 @@ be a matched physical comparison.
 - `hephaestus.registered-matched-tiles.v1` and its successful schedule-based claims;
 - the pinned registered regression contract and all six source RTL digests;
 - the qualifying OpenROAD smoke reference;
-- the exact shared-DAG source identity observed by the smoke run;
-- one immutable ORFS image digest;
+- the exact registered-manifest and shared-DAG identities observed by the smoke run;
+- one immutable ORFS image digest and the disclosed `NUM_CORES`/LEC settings;
+- the physical contract, including clock, I/O assumptions, floorplan, density, and routing layers;
+- the fail-closed `synth_compat.tcl` and `sanitize_yosys_netlist.py` helper artifacts;
 - safe, in-root, non-symlink artifact paths;
 - zero runtime coefficient reads for every backend.
 
 It then stages the exact registered bundle and emits one ORFS design directory per backend. Only the
-top module and its paired core RTL differ. Timing, floorplan, density, routing, and tool identity are
-common.
+top module and its paired core RTL differ. Timing, floorplan, density, routing, helpers, and tool
+identity are common.
 
 ## Physical attempts
 
@@ -112,27 +121,38 @@ metadata.json
 ```
 
 Every file is recorded with its byte size and SHA-256 digest. The final DEF is also parsed for die
-geometry, component count, net count, special-net count, rows, and routing tracks. Numeric ORFS
-quality-of-result fields are retained separately from runtime, host, timestamp, and version noise.
+geometry, component count, net count, special-net count, pin count, rows, tracks, and via
+definitions. Numeric ORFS quality-of-result fields are retained separately from runtime, host,
+timestamp, memory, and version noise.
+
+The Yosys/OpenSTA compatibility transform preserves the original synthesized netlist, removes only
+supported declaration-level `signed` tokens, records both hashes, preserves line count, and fails on
+any unsupported use. The transform is provenance-preserving syntax adaptation; it does not itself
+prove functional equivalence.
 
 ## Repeatability rule
 
 Raw GDSII embeds library and structure timestamps, so blindly requiring identical file hashes can
-turn creation dates into a false physical regression. Hephaestus therefore records both the raw GDS
-hash and a second digest that zeros only `BGNLIB` and `BGNSTR` date payloads while preserving every
-other GDSII record byte.
+turn creation dates into a false physical regression. Hephaestus records both the raw GDS hash and a
+second digest that zeros only `BGNLIB` and `BGNSTR` date payloads while preserving every other GDSII
+record byte.
+
+SPEF similarly carries one `*DATE` line. Repeatability therefore compares a second SPEF digest after
+normalizing only that line. Resistance, capacitance, connectivity, units, names, and every other
+SPEF byte remain covered.
 
 Two attempts qualify only when all of these agree:
 
 - final DEF SHA-256;
 - final mapped-Verilog SHA-256;
-- final SPEF SHA-256;
+- date-normalized SPEF SHA-256;
 - timestamp-normalized GDS SHA-256;
 - parsed DEF metrics;
 - selected stable numeric ORFS metrics.
 
-Raw GDS and OpenDB byte equality remain visible observations, but they are not silently promoted
-into requirements when only embedded timestamps or implementation serialization differ.
+Raw GDS, raw SPEF, and OpenDB hashes remain visible per-run observations, but they are not silently
+promoted into deterministic requirements when only embedded dates or implementation serialization
+differ.
 
 ## Negative control
 
@@ -150,6 +170,7 @@ python -m hephaestus.openroad_physical prepare \
   --registered-reference benchmarks/reference/registered_matched_tiles_tiny_v1.json \
   --probe-reference benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
   --contract configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+  --flow-helpers flows/openroad/registered_shared_dag \
   --out build/openroad-physical/prepared
 ```
 
@@ -178,7 +199,7 @@ The permanent CI entry point is `.github/workflows/openroad-physical-evidence.ym
 
 A passing first physical bundle may claim:
 
-- exact registered-source and contract binding;
+- exact registered-source, helper, toolchain, and contract binding;
 - use of one pinned ORFS image digest;
 - placement and routing of all three matched backends;
 - final GDS and SPEF generation;
