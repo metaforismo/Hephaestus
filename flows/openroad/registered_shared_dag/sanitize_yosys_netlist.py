@@ -46,14 +46,10 @@ def sanitize_bytes(raw: bytes) -> tuple[bytes, list[dict[str, Any]]]:
             output.append(line)
             continue
         if len(signed_tokens) != 1:
-            raise ValueError(
-                f"line {number} contains {len(signed_tokens)} signed tokens"
-            )
+            raise ValueError(f"line {number} contains {len(signed_tokens)} signed tokens")
         match = SIGNED_DECLARATION.fullmatch(body)
         if match is None:
-            raise ValueError(
-                f"line {number} uses signed outside a supported declaration: {body!r}"
-            )
+            raise ValueError(f"line {number} uses signed outside a supported declaration: {body!r}")
         sanitized_body = match.group("prefix") + match.group("suffix")
         if SIGNED_TOKEN.search(sanitized_body):
             raise AssertionError("signed token survived a declaration rewrite")
