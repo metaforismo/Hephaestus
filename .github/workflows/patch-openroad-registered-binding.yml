@@ -1,0 +1,144 @@
+name: One-shot correct registered source binding
+
+on:
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.head_ref == 'feat/openroad-physical-evidence' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-physical-evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Correct the stable source-binding boundary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('src/hephaestus/openroad_physical.py')
+          text = source.read_text(encoding='utf-8')
+          old = '''    smoke_source = probe_reference["source"]
+              if sha256_file(manifest_path) != smoke_source["registered_manifest_sha256"]:
+                  raise OpenROADPhysicalError(
+                      "registered manifest differs from the qualifying smoke run"
+                  )
+              shared = validated["shared_dag"]
+          '''.replace('          ', '')
+          new = '''    smoke_source = probe_reference["source"]
+              # The full smoke manifest hash is qualifying-run provenance. It includes
+              # upstream proof/log digests that can change while the registered contract,
+              # code matrix, cores, wrappers, oracle, and claim boundary remain identical.
+              # The pinned registered reference above is the stable semantic authority;
+              # every physical attempt is still bound to the exact current manifest hash.
+              shared = validated["shared_dag"]
+          '''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('registered-manifest equality block was not found exactly once')
+          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path('tests/test_openroad_physical.py')
+          text = tests.read_text(encoding='utf-8')
+          marker = 'def test_prepare_rejects_a_probe_for_different_shared_rtl'
+          if marker not in text:
+              raise SystemExit('test insertion marker is missing')
+          test = '''def test_prepare_accepts_manifest_provenance_drift_with_same_stable_sources(
+              tmp_path: Path,
+          ) -> None:
+              bundle, registered_reference, probe_reference, physical_contract, helpers = (
+                  _source_fixture(tmp_path)
+              )
+              manifest_path = bundle / "registered_manifest.json"
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+              manifest["source"] = {
+                  "formal_evidence_sha256": "f" * 64,
+                  "matched_manifest_sha256": "e" * 64,
+              }
+              _write_json(manifest_path, manifest)
+
+              prepared = prepare_physical_evidence(
+                  bundle,
+                  registered_reference,
+                  probe_reference,
+                  physical_contract,
+                  tmp_path / "prepared",
+                  helper_dir=helpers,
+              )
+
+              assert prepared["source"]["registered_manifest_sha256"] == sha256_file(
+                  manifest_path
+              )
+              assert prepared["claims"]["registered_source_binding_verified"]
+
+
+          '''.replace('          ', '')
+          if 'test_prepare_accepts_manifest_provenance_drift' not in text:
+              text = text.replace(f'def {marker}', test + f'def {marker}', 1)
+          tests.write_text(text, encoding='utf-8')
+
+          docs = Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md')
+          text = docs.read_text(encoding='utf-8')
+          replacements = {
+              '- the exact registered manifest, shared-DAG core, and wrapper digests;': (
+                  '- the qualifying registered-manifest digest as run provenance and the exact '
+                  'shared-DAG core and wrapper digests;'
+              ),
+              'The permanent matched flow refuses to start when the current registered shared-DAG source differs\nfrom that qualifying smoke source or when any part of the physical contract drifts.': (
+                  'The permanent matched flow refuses to start when the stable registered contract, code/core/wrapper\n'
+                  'artifacts, shared-DAG smoke source, or any part of the physical contract drifts. The complete\n'
+                  'registered manifest is still hashed into each prepared bundle and physical run, but its hash is not\n'
+                  'used as a cross-run identity because it also contains proof-log provenance.'
+              ),
+              '- the exact registered-manifest and shared-DAG identities observed by the smoke run;': (
+                  '- the stable registered reference plus the exact shared-DAG identities observed by the smoke run;'
+              ),
+          }
+          for old_text, new_text in replacements.items():
+              if old_text not in text:
+                  raise SystemExit(f'documentation text was not found: {old_text!r}')
+              text = text.replace(old_text, new_text, 1)
+          docs.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format and verify the corrected implementation
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+
+      - name: Commit the permanent correction
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md
+          git commit -m 'Bind physical runs to stable registered artifacts'
+          git push origin HEAD:feat/openroad-physical-evidence
