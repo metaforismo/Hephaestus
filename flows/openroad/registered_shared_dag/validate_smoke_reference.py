@@ -101,9 +101,7 @@ def parse_def(path: Path) -> dict[str, Any]:
 
         section_match = SECTION_COUNT_RE.fullmatch(line)
         if section_match is not None:
-            counts[section_match.group("section")] = int(
-                section_match.group("count")
-            )
+            counts[section_match.group("section")] = int(section_match.group("count"))
 
     if units is None or units <= 0:
         raise SmokeValidationError("DEF does not contain valid database units")
@@ -148,9 +146,7 @@ def normalize_gds_timestamps(raw: bytes) -> tuple[bytes, int]:
         record_type = raw[offset + 2]
         if record_type in (0x01, 0x05):
             if record_length != 28:
-                raise SmokeValidationError(
-                    f"unexpected timestamp record length {record_length}"
-                )
+                raise SmokeValidationError(f"unexpected timestamp record length {record_length}")
             output[offset + 4 : end] = b"\x00" * (record_length - 4)
             normalized += 1
         offset = end
@@ -169,9 +165,7 @@ def normalize_spef_date(raw: bytes) -> tuple[bytes, int]:
         raise SmokeValidationError("SPEF is not valid UTF-8") from exc
     matches = DATE_RE.findall(text)
     if len(matches) != 1:
-        raise SmokeValidationError(
-            f"expected one SPEF *DATE record, found {len(matches)}"
-        )
+        raise SmokeValidationError(f"expected one SPEF *DATE record, found {len(matches)}")
     normalized = DATE_RE.sub('*DATE "<normalized>"', text, count=1)
     return normalized.encode("utf-8"), 1
 
@@ -205,8 +199,7 @@ def require_exact_artifact(
 def compare_metrics(actual: dict[str, Any], expected: dict[str, Any]) -> None:
     if set(actual) != set(expected):
         raise SmokeValidationError(
-            "metric key set changed: "
-            f"expected {sorted(expected)}, got {sorted(actual)}"
+            f"metric key set changed: expected {sorted(expected)}, got {sorted(actual)}"
         )
     for name, expected_value in expected.items():
         actual_value = actual[name]
@@ -234,9 +227,7 @@ def validate(
     reference = load_json(reference_path)
     if reference.get("schema") != "hephaestus.openroad-registered-smoke-reference.v1":
         raise SmokeValidationError("unsupported smoke-reference schema")
-    if reference.get("reference_id") != (
-        "ihp-sg13g2-openroad-registered-shared-dag-smoke-v1"
-    ):
+    if reference.get("reference_id") != ("ihp-sg13g2-openroad-registered-shared-dag-smoke-v1"):
         raise SmokeValidationError("unexpected smoke-reference identity")
 
     expected_image = reference.get("toolchain", {}).get("orfs_image_repo_digest")
@@ -261,9 +252,7 @@ def validate(
     source_observed = {
         "registered_manifest_sha256": sha256_file(registered_manifest_path),
         "core_sha256": sha256_file(registered_root / str(shared.get("core_rtl"))),
-        "wrapper_sha256": sha256_file(
-            registered_root / str(shared.get("wrapper_rtl"))
-        ),
+        "wrapper_sha256": sha256_file(registered_root / str(shared.get("wrapper_rtl"))),
     }
     for field, observed in source_observed.items():
         expected = require_sha256(source_reference.get(field), context=f"source.{field}")
@@ -278,9 +267,7 @@ def validate(
         raise SmokeValidationError(
             f"pulled image does not expose the pinned RepoDigest: {repo_digests!r}"
         )
-    image_id = (root / "provenance/orfs-image-id.txt").read_text(
-        encoding="utf-8"
-    ).strip()
+    image_id = (root / "provenance/orfs-image-id.txt").read_text(encoding="utf-8").strip()
     expected_image_id = reference.get("toolchain", {}).get("orfs_image_id")
     if image_id != expected_image_id:
         raise SmokeValidationError(
@@ -299,9 +286,7 @@ def validate(
     )
     for fragment in required_fragments:
         if fragment not in tool_versions:
-            raise SmokeValidationError(
-                f"tool-version banner does not contain {fragment!r}"
-            )
+            raise SmokeValidationError(f"tool-version banner does not contain {fragment!r}")
 
     compatibility_path = exactly_one(
         root,
@@ -313,21 +298,13 @@ def validate(
         raise SmokeValidationError("reference compatibility transform is malformed")
     if compatibility.get("schema") != compatibility_reference.get("schema"):
         raise SmokeValidationError("compatibility-transform schema changed")
-    if compatibility.get("substitution_count") != compatibility_reference.get(
-        "substitution_count"
-    ):
+    if compatibility.get("substitution_count") != compatibility_reference.get("substitution_count"):
         raise SmokeValidationError("compatibility substitution count changed")
-    if compatibility.get("original") != compatibility_reference.get(
-        "original_netlist"
-    ):
+    if compatibility.get("original") != compatibility_reference.get("original_netlist"):
         raise SmokeValidationError("original synthesized-netlist signature changed")
-    if compatibility.get("sanitized") != compatibility_reference.get(
-        "sanitized_netlist"
-    ):
+    if compatibility.get("sanitized") != compatibility_reference.get("sanitized_netlist"):
         raise SmokeValidationError("sanitized synthesized-netlist signature changed")
-    if sha256_file(compatibility_path) != compatibility_reference.get(
-        "manifest_sha256"
-    ):
+    if sha256_file(compatibility_path) != compatibility_reference.get("manifest_sha256"):
         raise SmokeValidationError("compatibility manifest digest changed")
 
     outputs = {
@@ -373,24 +350,16 @@ def validate(
             f"expected {stable_reference.get('def')}, got {observed_def}"
         )
 
-    normalized_gds, gds_count = normalize_gds_timestamps(
-        outputs["final_gds"].read_bytes()
-    )
+    normalized_gds, gds_count = normalize_gds_timestamps(outputs["final_gds"].read_bytes())
     normalized_gds_digest = sha256_bytes(normalized_gds)
-    if normalized_gds_digest != stable_reference.get(
-        "gds_timestamp_normalized_sha256"
-    ):
+    if normalized_gds_digest != stable_reference.get("gds_timestamp_normalized_sha256"):
         raise SmokeValidationError("timestamp-normalized GDS signature changed")
     if gds_count != stable_reference.get("gds_timestamp_records_normalized"):
         raise SmokeValidationError("GDS timestamp-record count changed")
 
-    normalized_spef, spef_count = normalize_spef_date(
-        outputs["final_spef"].read_bytes()
-    )
+    normalized_spef, spef_count = normalize_spef_date(outputs["final_spef"].read_bytes())
     normalized_spef_digest = sha256_bytes(normalized_spef)
-    if normalized_spef_digest != stable_reference.get(
-        "spef_date_normalized_sha256"
-    ):
+    if normalized_spef_digest != stable_reference.get("spef_date_normalized_sha256"):
         raise SmokeValidationError("date-normalized SPEF signature changed")
     if spef_count != stable_reference.get("spef_date_records_normalized"):
         raise SmokeValidationError("SPEF date-record count changed")
@@ -466,9 +435,7 @@ def self_test() -> None:
 
     timestamp_payload = b"\x00" * 24
     gds = (
-        struct.pack(">HBB", 28, 0x01, 0x02)
-        + timestamp_payload
-        + struct.pack(">HBB", 4, 0x04, 0x00)
+        struct.pack(">HBB", 28, 0x01, 0x02) + timestamp_payload + struct.pack(">HBB", 4, 0x04, 0x00)
     )
     normalized_gds, count = normalize_gds_timestamps(gds)
     assert count == 1
@@ -501,9 +468,7 @@ def main() -> int:
         return 0
     required = (args.root, args.reference, args.registered, args.image_ref, args.out)
     if any(value is None for value in required):
-        raise SystemExit(
-            "--root, --reference, --registered, --image-ref, and --out are required"
-        )
+        raise SystemExit("--root, --reference, --registered, --image-ref, and --out are required")
     result = validate(
         args.root,
         args.reference,
