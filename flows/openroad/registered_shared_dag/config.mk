@@ -11,6 +11,12 @@ export VERILOG_FILES = $(HEPHAESTUS_REGISTERED_DIR)/shared_dag_core.sv \
                        $(HEPHAESTUS_REGISTERED_DIR)/shared_dag_registered.sv
 export SDC_FILE = $(dir $(DESIGN_CONFIG))/constraint.sdc
 
+# Run the stock ORFS synthesis script and then apply the narrow, manifest-bound
+# OpenSTA compatibility transform before synth_odb reads the generated netlist.
+export SYNTH_SCRIPT = $(dir $(DESIGN_CONFIG))/synth_compat.tcl
+export YOSYS_DEPENDENCIES += $(SYNTH_SCRIPT) \
+                             $(dir $(DESIGN_CONFIG))/sanitize_yosys_netlist.py
+
 export CLOCK_PORT = clk
 export CLOCK_PERIOD = 4.0
 
