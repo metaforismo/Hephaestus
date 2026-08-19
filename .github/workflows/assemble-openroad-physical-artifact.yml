@@ -80,16 +80,27 @@ jobs:
           from pathlib import Path
 
           path = Path('src/hephaestus/openroad_physical.py')
-          text = path.read_text(encoding='utf-8')
-          old = '''            "It does not prove post-physical functional equivalence, DRC, LVS, activity-based power,",
-            "validated PEX, foundry sign-off, or fabricated silicon. Comparative PPA is deliberately",
-            "disabled until the routed netlists receive downstream equivalence evidence.",'''
-          new = '''            "It does not prove post-physical equivalence, DRC, LVS, or activity-based power.",
-            "It also does not prove validated PEX, foundry sign-off, or fabricated silicon.",
-            "Comparative PPA stays disabled until routed-netlist equivalence is proved.",'''
-          if old not in text:
-              raise SystemExit('claim-boundary prose did not match the hardened payload')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          matches = [
+              index
+              for index, line in enumerate(lines)
+              if 'It does not prove post-physical functional equivalence' in line
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  f'expected one claim-boundary prose block, found {len(matches)}'
+              )
+          index = matches[0]
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines[index : index + 3] = [
+              indent
+              + '"It does not prove post-physical equivalence, DRC, LVS, or activity-based power.",',
+              indent
+              + '"It also does not prove validated PEX, foundry sign-off, or fabricated silicon.",',
+              indent
+              + '"Comparative PPA stays disabled until routed-netlist equivalence is proved.",',
+          ]
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python -m pip install -e '.[dev]'
           ruff format \
