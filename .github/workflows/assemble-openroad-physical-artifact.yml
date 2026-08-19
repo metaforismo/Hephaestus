@@ -36,7 +36,8 @@ jobs:
             .github/openroad-materialize/src_01.b64 \
             .github/openroad-materialize/src_02.b64 \
             .github/openroad-materialize/src_03_0.b64 \
-            .github/openroad-materialize/src_03_1.b64 \
+            .github/openroad-materialize/src_03_1_0.b64 \
+            .github/openroad-materialize/src_03_1_1.b64 \
             .github/openroad-materialize/src_03_2.b64 \
             .github/openroad-materialize/src_04.b64 \
             .github/openroad-materialize/src_05.b64 \
