@@ -101,9 +101,7 @@ def parse_def(path: Path) -> dict[str, Any]:
 
         section_match = SECTION_COUNT_RE.fullmatch(line)
         if section_match is not None:
-            counts[section_match.group("section")] = int(
-                section_match.group("count")
-            )
+            counts[section_match.group("section")] = int(section_match.group("count"))
 
     if units is None or units <= 0:
         raise SmokeValidationError("DEF does not contain valid database units")
@@ -148,9 +146,7 @@ def normalize_gds_timestamps(raw: bytes) -> tuple[bytes, int]:
         record_type = raw[offset + 2]
         if record_type in (0x01, 0x05):
             if record_length != 28:
-                raise SmokeValidationError(
-                    f"unexpected timestamp record length {record_length}"
-                )
+                raise SmokeValidationError(f"unexpected timestamp record length {record_length}")
             output[offset + 4 : end] = b"\x00" * (record_length - 4)
             normalized += 1
         offset = end
@@ -169,9 +165,7 @@ def normalize_spef_date(raw: bytes) -> tuple[bytes, int]:
         raise SmokeValidationError("SPEF is not valid UTF-8") from exc
     matches = DATE_RE.findall(text)
     if len(matches) != 1:
-        raise SmokeValidationError(
-            f"expected one SPEF *DATE record, found {len(matches)}"
-        )
+        raise SmokeValidationError(f"expected one SPEF *DATE record, found {len(matches)}")
     normalized = DATE_RE.sub('*DATE "<normalized>"', text, count=1)
     return normalized.encode("utf-8"), 1
 
@@ -205,319 +199,11 @@ def require_exact_artifact(
 def compare_metrics(actual: dict[str, Any], expected: dict[str, Any]) -> None:
     if set(actual) != set(expected):
         raise SmokeValidationError(
-            "metric key set changed: "
-            f"expected {sorted(expected)}, got {sorted(actual)}"
+            f"metric key set changed: expected {sorted(expected)}, got {sorted(actual)}"
         )
     for name, expected_value in expected.items():
         actual_value = actual[name]
         if type(expected_value) not in (int, float):
             raise SmokeValidationError(f"reference metric {name} is not numeric")
         if type(actual_value) not in (int, float):
-            raise SmokeValidationError(f"observed metric {name} is not numeric")
-        if not math.isclose(
-            float(actual_value),
-            float(expected_value),
-            rel_tol=0.0,
-            abs_tol=1e-9,
-        ):
-            raise SmokeValidationError(
-                f"metric {name} changed: expected {expected_value}, got {actual_value}"
-            )
-
-
-def validate(
-    root: Path,
-    reference_path: Path,
-    registered_root: Path,
-    image_ref: str,
-) -> dict[str, Any]:
-    reference = load_json(reference_path)
-    if reference.get("schema") != "hephaestus.openroad-registered-smoke-reference.v1":
-        raise SmokeValidationError("unsupported smoke-reference schema")
-    if reference.get("reference_id") != (
-        "ihp-sg13g2-openroad-registered-shared-dag-smoke-v1"
-    ):
-        raise SmokeValidationError("unexpected smoke-reference identity")
-
-    expected_image = reference.get("toolchain", {}).get("orfs_image_repo_digest")
-    if image_ref != expected_image:
-        raise SmokeValidationError(
-            f"workflow image differs from reference: {image_ref!r} != {expected_image!r}"
-        )
-
-    return_code_path = root / "orfs.returncode.txt"
-    if return_code_path.read_text(encoding="utf-8").strip() != "0":
-        raise SmokeValidationError("ORFS return code is not zero")
-
-    registered_manifest_path = registered_root / "registered_manifest.json"
-    registered_manifest = load_json(registered_manifest_path)
-    shared = registered_manifest.get("backends", {}).get("shared_dag")
-    if not isinstance(shared, dict):
-        raise SmokeValidationError("registered manifest lacks shared_dag")
-    source_reference = reference.get("source")
-    if not isinstance(source_reference, dict):
-        raise SmokeValidationError("reference source binding is malformed")
-
-    source_observed = {
-        "registered_manifest_sha256": sha256_file(registered_manifest_path),
-        "core_sha256": sha256_file(registered_root / str(shared.get("core_rtl"))),
-        "wrapper_sha256": sha256_file(
-            registered_root / str(shared.get("wrapper_rtl"))
-        ),
-    }
-    for field, observed in source_observed.items():
-        expected = require_sha256(source_reference.get(field), context=f"source.{field}")
-        if observed != expected:
-            raise SmokeValidationError(
-                f"source binding {field} changed: expected {expected}, got {observed}"
-            )
-
-    repo_digests_path = root / "provenance/orfs-image-repodigests.json"
-    repo_digests = json.loads(repo_digests_path.read_text(encoding="utf-8"))
-    if not isinstance(repo_digests, list) or expected_image not in repo_digests:
-        raise SmokeValidationError(
-            f"pulled image does not expose the pinned RepoDigest: {repo_digests!r}"
-        )
-    image_id = (root / "provenance/orfs-image-id.txt").read_text(
-        encoding="utf-8"
-    ).strip()
-    expected_image_id = reference.get("toolchain", {}).get("orfs_image_id")
-    if image_id != expected_image_id:
-        raise SmokeValidationError(
-            f"ORFS image ID changed: expected {expected_image_id}, got {image_id}"
-        )
-
-    tool_versions_path = root / "provenance/tool-versions.txt"
-    tool_versions = tool_versions_path.read_text(encoding="utf-8")
-    expected_versions = reference.get("toolchain", {}).get("tool_versions")
-    if not isinstance(expected_versions, dict):
-        raise SmokeValidationError("reference tool versions are malformed")
-    required_fragments = (
-        str(expected_versions.get("openroad")),
-        str(expected_versions.get("yosys")),
-        str(expected_versions.get("klayout")),
-    )
-    for fragment in required_fragments:
-        if fragment not in tool_versions:
-            raise SmokeValidationError(
-                f"tool-version banner does not contain {fragment!r}"
-            )
-
-    compatibility_path = exactly_one(
-        root,
-        "results/**/smoke/1_2_yosys.opensta_compat.json",
-    )
-    compatibility = load_json(compatibility_path)
-    compatibility_reference = reference.get("compatibility_transform")
-    if not isinstance(compatibility_reference, dict):
-        raise SmokeValidationError("reference compatibility transform is malformed")
-    if compatibility.get("schema") != compatibility_reference.get("schema"):
-        raise SmokeValidationError("compatibility-transform schema changed")
-    if compatibility.get("substitution_count") != compatibility_reference.get(
-        "substitution_count"
-    ):
-        raise SmokeValidationError("compatibility substitution count changed")
-    if compatibility.get("original") != compatibility_reference.get(
-        "original_netlist"
-    ):
-        raise SmokeValidationError("original synthesized-netlist signature changed")
-    if compatibility.get("sanitized") != compatibility_reference.get(
-        "sanitized_netlist"
-    ):
-        raise SmokeValidationError("sanitized synthesized-netlist signature changed")
-    if sha256_file(compatibility_path) != compatibility_reference.get(
-        "manifest_sha256"
-    ):
-        raise SmokeValidationError("compatibility manifest digest changed")
-
-    outputs = {
-        "final_gds": exactly_one(root, "results/**/smoke/6_final.gds"),
-        "final_def": exactly_one(root, "results/**/smoke/6_final.def"),
-        "final_open_db": exactly_one(root, "results/**/smoke/6_final.odb"),
-        "final_verilog": exactly_one(root, "results/**/smoke/6_final.v"),
-        "final_spef": exactly_one(root, "results/**/smoke/6_final.spef"),
-        "final_sdc": exactly_one(root, "results/**/smoke/6_final.sdc"),
-        "route_guide": exactly_one(root, "results/**/smoke/route.guide"),
-    }
-    artifact_reference = reference.get("artifacts")
-    if not isinstance(artifact_reference, dict):
-        raise SmokeValidationError("reference artifacts are malformed")
-
-    exact_output_names = ("final_def", "final_verilog", "final_sdc", "route_guide")
-    observed_outputs: dict[str, dict[str, Any]] = {}
-    for name in exact_output_names:
-        expected = artifact_reference.get(name)
-        if not isinstance(expected, dict):
-            raise SmokeValidationError(f"reference artifact {name} is malformed")
-        observed_outputs[name] = require_exact_artifact(
-            outputs[name],
-            expected,
-            context=f"artifacts.{name}",
-        )
-
-    for name in ("final_gds", "final_open_db", "final_spef"):
-        path = outputs[name]
-        observed_outputs[name] = {
-            "path": path.as_posix(),
-            "size_bytes": path.stat().st_size,
-            "sha256": sha256_file(path),
-        }
-
-    stable_reference = reference.get("stable_signatures")
-    if not isinstance(stable_reference, dict):
-        raise SmokeValidationError("reference stable signatures are malformed")
-    observed_def = parse_def(outputs["final_def"])
-    if observed_def != stable_reference.get("def"):
-        raise SmokeValidationError(
-            "parsed DEF signature changed: "
-            f"expected {stable_reference.get('def')}, got {observed_def}"
-        )
-
-    normalized_gds, gds_count = normalize_gds_timestamps(
-        outputs["final_gds"].read_bytes()
-    )
-    normalized_gds_digest = sha256_bytes(normalized_gds)
-    if normalized_gds_digest != stable_reference.get(
-        "gds_timestamp_normalized_sha256"
-    ):
-        raise SmokeValidationError("timestamp-normalized GDS signature changed")
-    if gds_count != stable_reference.get("gds_timestamp_records_normalized"):
-        raise SmokeValidationError("GDS timestamp-record count changed")
-
-    normalized_spef, spef_count = normalize_spef_date(
-        outputs["final_spef"].read_bytes()
-    )
-    normalized_spef_digest = sha256_bytes(normalized_spef)
-    if normalized_spef_digest != stable_reference.get(
-        "spef_date_normalized_sha256"
-    ):
-        raise SmokeValidationError("date-normalized SPEF signature changed")
-    if spef_count != stable_reference.get("spef_date_records_normalized"):
-        raise SmokeValidationError("SPEF date-record count changed")
-
-    report_path = exactly_one(root, "logs/**/smoke/6_report.json")
-    report = load_json(report_path)
-    expected_metrics = reference.get("metrics")
-    if not isinstance(expected_metrics, dict):
-        raise SmokeValidationError("reference metrics are malformed")
-    actual_metrics = {name: report.get(name) for name in expected_metrics}
-    compare_metrics(actual_metrics, expected_metrics)
-
-    claims = reference.get("claims")
-    if not isinstance(claims, dict):
-        raise SmokeValidationError("reference claims are malformed")
-    required_true = (
-        "registered_source_binding_verified",
-        "single_backend_orfs_flow_completed",
-        "placement_performed",
-        "routing_performed",
-        "gds_generated",
-        "spef_generated",
-        "timing_constraints_analyzed",
-        "four_nanosecond_target_met_in_qualifying_run",
-    )
-    required_false = (
-        "matched_three_backend_physical_comparison_performed",
-        "post_physical_equivalence_verified",
-        "drc_clean",
-        "lvs_clean",
-        "power_estimated_with_activity",
-        "post_layout_pex_verified",
-        "foundry_signoff_complete",
-        "silicon_verified",
-    )
-    if any(claims.get(name) is not True for name in required_true):
-        raise SmokeValidationError("reference lacks a required positive claim")
-    if any(claims.get(name) is not False for name in required_false):
-        raise SmokeValidationError("reference overstates its claim boundary")
-
-    return {
-        "schema": "hephaestus.openroad-registered-smoke-validation.v1",
-        "reference_id": reference["reference_id"],
-        "reference_sha256": sha256_file(reference_path),
-        "source": source_observed,
-        "toolchain": {
-            "orfs_image_repo_digest": image_ref,
-            "orfs_image_id": image_id,
-            "tool_versions_sha256": sha256_file(tool_versions_path),
-        },
-        "compatibility_transform": {
-            "manifest_sha256": sha256_file(compatibility_path),
-            "substitution_count": compatibility["substitution_count"],
-        },
-        "outputs": observed_outputs,
-        "stable_signatures": {
-            "def": observed_def,
-            "gds_timestamp_normalized_sha256": normalized_gds_digest,
-            "gds_timestamp_records_normalized": gds_count,
-            "spef_date_normalized_sha256": normalized_spef_digest,
-            "spef_date_records_normalized": spef_count,
-        },
-        "metrics": actual_metrics,
-        "claims": claims,
-    }
-
-
-def self_test() -> None:
-    spef = b'*SPEF "ieee 1481-1999"\n*DATE "today"\n*DESIGN "x"\n'
-    normalized_spef, count = normalize_spef_date(spef)
-    assert count == 1
-    assert b"today" not in normalized_spef
-
-    timestamp_payload = b"\x00" * 24
-    gds = (
-        struct.pack(">HBB", 28, 0x01, 0x02)
-        + timestamp_payload
-        + struct.pack(">HBB", 4, 0x04, 0x00)
-    )
-    normalized_gds, count = normalize_gds_timestamps(gds)
-    assert count == 1
-    assert len(normalized_gds) == len(gds)
-
-    try:
-        normalize_spef_date(b'*SPEF "x"\n')
-    except SmokeValidationError:
-        pass
-    else:
-        raise AssertionError("SPEF without *DATE was accepted")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path)
-    parser.add_argument("--reference", type=Path)
-    parser.add_argument("--registered", type=Path)
-    parser.add_argument("--image-ref")
-    parser.add_argument("--out", type=Path)
-    parser.add_argument("--self-test", action="store_true")
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    if args.self_test:
-        self_test()
-        print("OpenROAD smoke-reference validator self-test passed.")
-        return 0
-    required = (args.root, args.reference, args.registered, args.image_ref, args.out)
-    if any(value is None for value in required):
-        raise SystemExit(
-            "--root, --reference, --registered, --image-ref, and --out are required"
-        )
-    result = validate(
-        args.root,
-        args.reference,
-        args.registered,
-        args.image_ref,
-    )
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+            raise SmokeValidationError(f"observed metric {name} is not numer²È="25¹‘•™•É•¹”¹•Ð ‰½É¥¥¹…±}¹•Ñ±¥ÍÐˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰½É¥¥¹…°Íå¹Ñ¡•Í¥é•µ¹•Ñ±¥ÍÐÍ¥¹…ÑÕÉ”¡…¹•ˆ¤(€€€¥˜½µÁ…Ñ¥‰¥±¥Ñä¹•Ð ‰Í…¹¥Ñ¥é•ˆ¤€„ô½µÁ…Ñ¥‰¥±¥Ñå}É•™•É•¹”¹•Ð ‰Í…¹¥Ñ¥é•‘}¹•Ñ±¥ÍÐˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰Í…¹¥Ñ¥é•Íå¹Ñ¡•Í¥é•µ¹•Ñ±¥ÍÐÍ¥¹…ÑÕÉ”¡…¹•ˆ¤(€€€¥˜Í¡„ÈÔÙ}™¥±”¡½µÁ…Ñ¥‰¥±¥Ñå}Á…Ñ ¤€„ô½µÁ…Ñ¥‰¥±¥Ñå}É•™•É•¹”¹•Ð ‰µ…¹¥™•ÍÑ}Í¡„ÈÔØˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰½µÁ…Ñ¥‰¥±¥Ñäµ…¹¥™•ÍÐ‘¥•ÍÐ¡…¹•ˆ¤((€€€½ÕÑÁÕÑÌ€ôì(€€€€€€€€‰™¥¹…±}‘Ìˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹‘Ìˆ¤°(€€€€€€€€‰™¥¹…±}‘•˜ˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹‘•˜ˆ¤°(€€€€€€€€‰™¥¹…±}½Á•¹}‘ˆˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹½‘ˆˆ¤°(€€€€€€€€‰™¥¹…±}Ù•É¥±½œˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹Øˆ¤°(€€€€€€€€‰™¥¹…±}ÍÁ•˜ˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹ÍÁ•˜ˆ¤°(€€€€€€€€‰™¥¹…±}Í‘Œˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”¼Ù}™¥¹…°¹Í‘Œˆ¤°(€€€€€€€€‰É½ÕÑ•}Õ¥‘”ˆè•á…Ñ±å}½¹”¡É½½Ð°€‰É•ÍÕ±ÑÌ¼¨¨½Íµ½­”½É½ÕÑ”¹Õ¥‘”ˆ¤°(€€€ô(€€€…ÉÑ¥™…Ñ}É•™•É•¹”€ôÉ•™•É•¹”¹•Ð ‰…ÉÑ¥™…ÑÌˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡…ÉÑ¥™…Ñ}É•™•É•¹”°‘¥Ð¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”…ÉÑ¥™…ÑÌ…É”µ…±™½Éµ•ˆ¤((€€€•á…Ñ}½ÕÑÁÕÑ}¹…µ•Ì€ô€ ‰™¥¹…±}‘•˜ˆ°€‰™¥¹…±}Ù•É¥±½œˆ°€‰™¥¹…±}Í‘Œˆ°€‰É½ÕÑ•}Õ¥‘”ˆ¤(€€€½‰Í•ÉÙ•‘}½ÕÑÁÕÑÌè‘¥ÑmÍÑÈ°‘¥ÑmÍÑÈ°¹åut€ôíô(€€€™½È¹…µ”¥¸•á…Ñ}½ÕÑÁÕÑ}¹…µ•Ìè(€€€€€€€•áÁ•Ñ•€ô…ÉÑ¥™…Ñ}É•™•É•¹”¹•Ð¡¹…µ”¤(€€€€€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡•áÁ•Ñ•°‘¥Ð¤è(€€€€€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È¡˜‰É•™•É•¹”…ÉÑ¥™…Ðí¹…µ•ô¥Ìµ…±™½Éµ•ˆ¤(€€€€€€€½‰Í•ÉÙ•‘}½ÕÑÁÕÑÍm¹…µ•t€ôÉ•ÅÕ¥É•}•á…Ñ}…ÉÑ¥™…Ð (€€€€€€€€€€€½ÕÑÁÕÑÍm¹…µ•t°(€€€€€€€€€€€•áÁ•Ñ•°(€€€€€€€€€€€½¹Ñ•áÐõ˜‰…ÉÑ¥™…ÑÌ¹í¹…µ•ôˆ°(€€€€€€€€¤((€€€™½È¹…µ”¥¸€ ‰™¥¹…±}‘Ìˆ°€‰™¥¹…±}½Á•¹}‘ˆˆ°€‰™¥¹…±}ÍÁ•˜ˆ¤è(€€€€€€€Á…Ñ €ô½ÕÑÁÕÑÍm¹…µ•t(€€€€€€€½‰Í•ÉÙ•‘}½ÕÑÁÕÑÍm¹…µ•t€ôì(€€€€€€€€€€€€‰Á…Ñ ˆèÁ…Ñ ¹…Í}Á½Í¥à ¤°(€€€€€€€€€€€€‰Í¥é•}‰åÑ•ÌˆèÁ…Ñ ¹ÍÑ…Ð ¤¹ÍÑ}Í¥é”°(€€€€€€€€€€€€‰Í¡„ÈÔØˆèÍ¡„ÈÔÙ}™¥±”¡Á…Ñ ¤°(€€€€€€€ô((€€€ÍÑ…‰±•}É•™•É•¹”€ôÉ•™•É•¹”¹•Ð ‰ÍÑ…‰±•}Í¥¹…ÑÕÉ•Ìˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡ÍÑ…‰±•}É•™•É•¹”°‘¥Ð¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”ÍÑ…‰±”Í¥¹…ÑÕÉ•Ì…É”µ…±™½Éµ•ˆ¤(€€€½‰Í•ÉÙ•‘}‘•˜€ôÁ…ÉÍ•}‘•˜¡½ÕÑÁÕÑÍl‰™¥¹…±}‘•˜‰t¤(€€€¥˜½‰Í•ÉÙ•‘}‘•˜€„ôÍÑ…‰±•}É•™•É•¹”¹•Ð ‰‘•˜ˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È (€€€€€€€€€€€€‰Á…ÉÍ•Í¥¹…ÑÕÉ”¡…¹•è€ˆ(€€€€€€€€€€€˜‰•áÁ•Ñ•íÍÑ…‰±•}É•™•É•¹”¹•Ð ‘•˜œ¥ô°½Ðí½‰Í•ÉÙ•‘}‘•™ôˆ(€€€€€€€€¤((€€€¹½Éµ…±¥é•‘}‘Ì°‘Í}½Õ¹Ð€ô¹½Éµ…±¥é•}‘Í}Ñ¥µ•ÍÑ…µÁÌ¡½ÕÑÁÕÑÍl‰™¥¹…±}‘Ì‰t¹É•…‘}‰åÑ•Ì ¤¤(€€€¹½Éµ…±¥é•‘}‘Í}‘¥•ÍÐ€ôÍ¡„ÈÔÙ}‰åÑ•Ì¡¹½Éµ…±¥é•‘}‘Ì¤(€€€¥˜¹½Éµ…±¥é•‘}‘Í}‘¥•ÍÐ€„ôÍÑ…‰±•}É•™•É•¹”¹•Ð ‰‘Í}Ñ¥µ•ÍÑ…µÁ}¹½Éµ…±¥é•‘}Í¡„ÈÔØˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰Ñ¥µ•ÍÑ…µÀµ¹½Éµ…±¥é•LÍ¥¹…ÑÕÉ”¡…¹•ˆ¤(€€€¥˜‘Í}½Õ¹Ð€„ôÍÑ…‰±•}É•™•É•¹”¹•Ð ‰‘Í}Ñ¥µ•ÍÑ…µÁ}É•½É‘Í}¹½Éµ…±¥é•ˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰LÑ¥µ•ÍÑ…µÀµÉ•½É½Õ¹Ð¡…¹•ˆ¤((€€€¹½Éµ…±¥é•‘}ÍÁ•˜°ÍÁ•™}½Õ¹Ð€ô¹½Éµ…±¥é•}ÍÁ•™}‘…Ñ”¡½ÕÑÁÕÑÍl‰™¥¹…±}ÍÁ•˜‰t¹É•…‘}‰åÑ•Ì ¤¤(€€€¹½Éµ…±¥é•‘}ÍÁ•™}‘¥•ÍÐ€ôÍ¡„ÈÔÙ}‰åÑ•Ì¡¹½Éµ…±¥é•‘}ÍÁ•˜¤(€€€¥˜¹½Éµ…±¥é•‘}ÍÁ•™}‘¥•ÍÐ€„ôÍÑ…‰±•}É•™•É•¹”¹•Ð ‰ÍÁ•™}‘…Ñ•}¹½Éµ…±¥é•‘}Í¡„ÈÔØˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰‘…Ñ”µ¹½Éµ…±¥é•MAÍ¥¹…ÑÕÉ”¡…¹•ˆ¤(€€€¥˜ÍÁ•™}½Õ¹Ð€„ôÍÑ…‰±•}É•™•É•¹”¹•Ð ‰ÍÁ•™}‘…Ñ•}É•½É‘Í}¹½Éµ…±¥é•ˆ¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰MA‘…Ñ”µÉ•½É½Õ¹Ð¡…¹•ˆ¤((€€€É•Á½ÉÑ}Á…Ñ €ô•á…Ñ±å}½¹”¡É½½Ð°€‰±½Ì¼¨¨½Íµ½­”¼Ù}É•Á½ÉÐ¹©Í½¸ˆ¤(€€€É•Á½ÉÐ€ô±½…‘}©Í½¸¡É•Á½ÉÑ}Á…Ñ ¤(€€€•áÁ•Ñ•‘}µ•ÑÉ¥Ì€ôÉ•™•É•¹”¹•Ð ‰µ•ÑÉ¥Ìˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡•áÁ•Ñ•‘}µ•ÑÉ¥Ì°‘¥Ð¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”µ•ÑÉ¥Ì…É”µ…±™½Éµ•ˆ¤(€€€…ÑÕ…±}µ•ÑÉ¥Ì€ôí¹…µ”èÉ•Á½ÉÐ¹•Ð¡¹…µ”¤™½È¹…µ”¥¸•áÁ•Ñ•‘}µ•ÑÉ¥Íô(€€€½µÁ…É•}µ•ÑÉ¥Ì¡…ÑÕ…±}µ•ÑÉ¥Ì°•áÁ•Ñ•‘}µ•ÑÉ¥Ì¤((€€€±…¥µÌ€ôÉ•™•É•¹”¹•Ð ‰±…¥µÌˆ¤(€€€¥˜¹½Ð¥Í¥¹ÍÑ…¹”¡±…¥µÌ°‘¥Ð¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”±…¥µÌ…É”µ…±™½Éµ•ˆ¤(€€€É•ÅÕ¥É•‘}ÑÉÕ”€ô€ (€€€€€€€€‰É•¥ÍÑ•É•‘}Í½ÕÉ•}‰¥¹‘¥¹}Ù•É¥™¥•ˆ°(€€€€€€€€‰Í¥¹±•}‰…­•¹‘}½É™Í}™±½Ý}½µÁ±•Ñ•ˆ°(€€€€€€€€‰Á±…•µ•¹Ñ}Á•É™½Éµ•ˆ°(€€€€€€€€‰É½ÕÑ¥¹}Á•É™½Éµ•ˆ°(€€€€€€€€‰‘Í}•¹•É…Ñ•ˆ°(€€€€€€€€‰ÍÁ•™}•¹•É…Ñ•ˆ°(€€€€€€€€‰Ñ¥µ¥¹}½¹ÍÑÉ…¥¹ÑÍ}…¹…±åé•ˆ°(€€€€€€€€‰™½ÕÉ}¹…¹½Í•½¹‘}Ñ…É•Ñ}µ•Ñ}¥¹}ÅÕ…±¥™å¥¹}ÉÕ¸ˆ°(€€€€¤(€€€É•ÅÕ¥É•‘}™…±Í”€ô€ (€€€€€€€€‰µ…Ñ¡•‘}Ñ¡É••}‰…­•¹‘}Á¡åÍ¥…±}½µÁ…É¥Í½¹}Á•É™½Éµ•ˆ°(€€€€€€€€‰Á½ÍÑ}Á¡åÍ¥…±}•ÅÕ¥Ù…±•¹•}Ù•É¥™¥•ˆ°(€€€€€€€€‰‘É}±•…¸ˆ°(€€€€€€€€‰±ÙÍ}±•…¸ˆ°(€€€€€€€€‰Á½Ý•É}•ÍÑ¥µ…Ñ•‘}Ý¥Ñ¡}…Ñ¥Ù¥Ñäˆ°(€€€€€€€€‰Á½ÍÑ}±…å½ÕÑ}Á•á}Ù•É¥™¥•ˆ°(€€€€€€€€‰™½Õ¹‘Éå}Í¥¹½™™}½µÁ±•Ñ”ˆ°(€€€€€€€€‰Í¥±¥½¹}Ù•É¥™¥•ˆ°(€€€€¤(€€€¥˜…¹ä¡±…¥µÌ¹•Ð¡¹…µ”¤¥Ì¹½ÐQÉÕ”™½È¹…µ”¥¸É•ÅÕ¥É•‘}ÑÉÕ”¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”±…­Ì„É•ÅÕ¥É•Á½Í¥Ñ¥Ù”±…¥´ˆ¤(€€€¥˜…¹ä¡±…¥µÌ¹•Ð¡¹…µ”¤¥Ì¹½Ð…±Í”™½È¹…µ”¥¸É•ÅÕ¥É•‘}™…±Í”¤è(€€€€€€€É…¥Í”Mµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½È ‰É•™•É•¹”½Ù•ÉÍÑ…Ñ•Ì¥ÑÌ±…¥´‰½Õ¹‘…Éäˆ¤((€€€É•ÑÕÉ¸ì(€€€€€€€€‰Í¡•µ„ˆè€‰¡•Á¡…•ÍÑÕÌ¹½Á•¹É½…µÉ•¥ÍÑ•É•µÍµ½­”µÙ…±¥‘…Ñ¥½¸¹ØÄˆ°(€€€€€€€€‰É•™•É•¹•}¥ˆèÉ•™•É•¹•l‰É•™•É•¹•}¥‰t°(€€€€€€€€‰É•™•É•¹•}Í¡„ÈÔØˆèÍ¡„ÈÔÙ}™¥±”¡É•™•É•¹•}Á…Ñ ¤°(€€€€€€€€‰Í½ÕÉ”ˆèÍ½ÕÉ•}½‰Í•ÉÙ•°(€€€€€€€€‰Ñ½½±¡…¥¸ˆèì(€€€€€€€€€€€€‰½É™Í}¥µ…•}É•Á½}‘¥•ÍÐˆè¥µ…•}É•˜°(€€€€€€€€€€€€‰½É™Í}¥µ…•}¥ˆè¥µ…•}¥°(€€€€€€€€€€€€‰Ñ½½±}Ù•ÉÍ¥½¹Í}Í¡„ÈÔØˆèÍ¡„ÈÔÙ}™¥±”¡Ñ½½±}Ù•ÉÍ¥½¹Í}Á…Ñ ¤°(€€€€€€€ô°(€€€€€€€€‰½µÁ…Ñ¥‰¥±¥Ñå}ÑÉ…¹Í™½É´ˆèì(€€€€€€€€€€€€‰µ…¹¥™•ÍÑ}Í¡„ÈÔØˆèÍ¡„ÈÔÙ}™¥±”¡½µÁ…Ñ¥‰¥±¥Ñå}Á…Ñ ¤°(€€€€€€€€€€€€‰ÍÕ‰ÍÑ¥ÑÕÑ¥½¹}½Õ¹Ðˆè½µÁ…Ñ¥‰¥±¥Ñål‰ÍÕ‰ÍÑ¥ÑÕÑ¥½¹}½Õ¹Ð‰t°(€€€€€€€ô°(€€€€€€€€‰½ÕÑÁÕÑÌˆè½‰Í•ÉÙ•‘}½ÕÑÁÕÑÌ°(€€€€€€€€‰ÍÑ…‰±•}Í¥¹…ÑÕÉ•Ìˆèì(€€€€€€€€€€€€‰‘•˜ˆè½‰Í•ÉÙ•‘}‘•˜°(€€€€€€€€€€€€‰‘Í}Ñ¥µ•ÍÑ…µÁ}¹½Éµ…±¥é•‘}Í¡„ÈÔØˆè¹½Éµ…±¥é•‘}‘Í}‘¥•ÍÐ°(€€€€€€€€€€€€‰‘Í}Ñ¥µ•ÍÑ…µÁ}É•½É‘Í}¹½Éµ…±¥é•ˆè‘Í}½Õ¹Ð°(€€€€€€€€€€€€‰ÍÁ•™}‘…Ñ•}¹½Éµ…±¥é•‘}Í¡„ÈÔØˆè¹½Éµ…±¥é•‘}ÍÁ•™}‘¥•ÍÐ°(€€€€€€€€€€€€‰ÍÁ•™}‘…Ñ•}É•½É‘Í}¹½Éµ…±¥é•ˆèÍÁ•™}½Õ¹Ð°(€€€€€€€ô°(€€€€€€€€‰µ•ÑÉ¥Ìˆè…ÑÕ…±}µ•ÑÉ¥Ì°(€€€€€€€€‰±…¥µÌˆè±…¥µÌ°(€€€ô(()‘•˜Í•±™}Ñ•ÍÐ ¤€´ø9½¹”è(€€€ÍÁ•˜€ôˆœ©MA€‰¥••”€ÄÐàÄ´Ääää‰q¸©Q€‰Ñ½‘…ä‰q¸©M%8€‰à‰q¸œ(€€€¹½Éµ…±¥é•‘}ÍÁ•˜°½Õ¹Ð€ô¹½Éµ…±¥é•}ÍÁ•™}‘…Ñ”¡ÍÁ•˜¤(€€€…ÍÍ•ÉÐ½Õ¹Ð€ôô€Ä(€€€…ÍÍ•ÉÐˆÑ½‘…äœ¹½Ð¥¸¹½Éµ…±¥é•‘}ÍÁ•˜((€€€Ñ¥µ•ÍÑ…µÁ}Á…å±½…€ôˆ‰qàÀÀˆ€¨€ÈÐ(€€€‘Ì€ô€ (€€€€€€€ÍÑÉÕÐ¹Á…¬ ˆù!	ˆ°€Èà°€ÁàÀÄ°€ÁàÀÈ¤€¬Ñ¥µ•ÍÑ…µÁ}Á…å±½…€¬ÍÑÉÕÐ¹Á…¬ ˆù!	ˆ°€Ð°€ÁàÀÐ°€ÁàÀÀ¤(€€€€¤(€€€¹½Éµ…±¥é•‘}‘Ì°½Õ¹Ð€ô¹½Éµ…±¥é•}‘Í}Ñ¥µ•ÍÑ…µÁÌ¡‘Ì¤(€€€…ÍÍ•ÉÐ½Õ¹Ð€ôô€Ä(€€€…ÍÍ•ÉÐ±•¸¡¹½Éµ…±¥é•‘}‘Ì¤€ôô±•¸¡‘Ì¤((€€€ÑÉäè(€€€€€€€¹½Éµ…±¥é•}ÍÁ•™}‘…Ñ”¡ˆœ©MA€‰à‰q¸œ¤(€€€•á•ÁÐMµ½­•Y…±¥‘…Ñ¥½¹ÉÉ½Èè(€€€€€€€Á…ÍÌ(€€€•±Í”è(€€€€€€€É…¥Í”ÍÍ•ÉÑ¥½¹ÉÉ½È ‰MAÝ¥Ñ¡½ÕÐ€©QÝ…Ì…•ÁÑ•ˆ¤(()‘•˜Á…ÉÍ•}…ÉÌ ¤€´ø…ÉÁ…ÉÍ”¹9…µ•ÍÁ…”è(€€€Á…ÉÍ•È€ô…ÉÁ…ÉÍ”¹ÉÕµ•¹ÑA…ÉÍ•È ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µÉ½½Ðˆ°ÑåÁ”õA…Ñ ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µÉ•™•É•¹”ˆ°ÑåÁ”õA…Ñ ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µÉ•¥ÍÑ•É•ˆ°ÑåÁ”õA…Ñ ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µ¥µ…”µÉ•˜ˆ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µ½ÕÐˆ°ÑåÁ”õA…Ñ ¤(€€€Á…ÉÍ•È¹…‘‘}…ÉÕµ•¹Ð ˆ´µÍ•±˜µÑ•ÍÐˆ°…Ñ¥½¸ô‰ÍÑ½É•}ÑÉÕ”ˆ¤(€€€É•ÑÕÉ¸Á…ÉÍ•È¹Á…ÉÍ•}…ÉÌ ¤(()‘•˜µ…¥¸ ¤€´ø¥¹Ðè(€€€…ÉÌ€ôÁ…ÉÍ•}…ÉÌ ¤(€€€¥˜…ÉÌ¹Í•±™}Ñ•ÍÐè(€€€€€€€Í•±™}Ñ•ÍÐ ¤(€€€€€€€ÁÉ¥¹Ð ‰=Á•¹I=Íµ½­”µÉ•™•É•¹”Ù…±¥‘…Ñ½ÈÍ•±˜µÑ•ÍÐÁ…ÍÍ•¸ˆ¤(€€€€€€€É•ÑÕÉ¸€À(€€€É•ÅÕ¥É•€ô€¡…ÉÌ¹É½½Ð°…ÉÌ¹É•™•É•¹”°…ÉÌ¹É•¥ÍÑ•É•°…ÉÌ¹¥µ…•}É•˜°…ÉÌ¹½ÕÐ¤(€€€¥˜…¹ä¡Ù…±Õ”¥Ì9½¹”™½ÈÙ…±Õ”¥¸É•ÅÕ¥É•¤è(€€€€€€€É…¥Í”MåÍÑ•µá¥Ð ˆ´µÉ½½Ð°€´µÉ•™•É•¹”°€´µÉ•¥ÍÑ•É•°€´µ¥µ…”µÉ•˜°…¹€´µ½ÕÐ…É”É•ÅÕ¥É•ˆ¤(€€€É•ÍÕ±Ð€ôÙ…±¥‘…Ñ” (€€€€€€€…ÉÌ¹É½½Ð°(€€€€€€€…ÉÌ¹É•™•É•¹”°(€€€€€€€…ÉÌ¹É•¥ÍÑ•É•°(€€€€€€€…ÉÌ¹¥µ…•}É•˜°(€€€€¤(€€€…ÉÌ¹½ÕÐ¹Á…É•¹Ð¹µ­‘¥È¡Á…É•¹ÑÌõQÉÕ”°•á¥ÍÑ}½¬õQÉÕ”¤(€€€…ÉÌ¹½ÕÐ¹ÝÉ¥Ñ•}Ñ•áÐ (€€€€€€€©Í½¸¹‘ÕµÁÌ¡É•ÍÕ±Ð°¥¹‘•¹ÐôÈ°Í½ÉÑ}­•åÌõQÉÕ”¤€¬€‰q¸ˆ°(€€€€€€€•¹½‘¥¹œô‰ÕÑ˜´àˆ°(€€€€¤(€€€ÁÉ¥¹Ð¡©Í½¸¹‘ÕµÁÌ¡É•ÍÕ±Ð°¥¹‘•¹ÐôÈ°Í½ÉÑ}­•åÌõQÉÕ”¤¤(€€€É•ÑÕÉ¸€À(()¥˜}}¹…µ•}|€ôô€‰}}µ…¥¹}|ˆè(€€€É…¥Í”MåÍÑ•µá¥Ð¡µ…¥¸ ¤¤
