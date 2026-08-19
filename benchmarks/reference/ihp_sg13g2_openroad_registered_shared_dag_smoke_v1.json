@@ -164,7 +164,9 @@
       "via_definition_count": 14
     },
     "gds_timestamp_normalized_sha256": "0e0b995933927c2541de7631bd1b6723f261ef7fbdce0c44623f2165b8e3e5f8",
-    "gds_timestamp_records_normalized": 60
+    "gds_timestamp_records_normalized": 60,
+    "spef_date_normalized_sha256": "938ae0d96e9ad0255020bd2e7323cc55cf44fa0ca795b1d0d51510465d0e8f91",
+    "spef_date_records_normalized": 1
   },
   "toolchain": {
     "num_cores": 1,
