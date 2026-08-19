@@ -1,4 +1,4 @@
-name: Assemble OpenROAD physical source artifact
+name: One-shot materialize OpenROAD physical source
 
 on:
   pull_request:
@@ -8,11 +8,13 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  assemble:
-    if: github.head_ref == 'feat/openroad-physical-evidence'
+  materialize:
+    if: >-
+      github.head_ref == 'feat/openroad-physical-evidence' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -25,7 +27,20 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Import the qualified smoke boundary
+      - name: Decode the hardened implementation payload
+        run: |
+          set -euo pipefail
+          mkdir -p src/hephaestus tests
+          base64 --decode \
+            .github/openroad-physical-payload/openroad_physical.py.gz.b64 \
+            | gzip --decompress \
+            > src/hephaestus/openroad_physical.py
+          base64 --decode \
+            .github/openroad-physical-payload/test_openroad_physical.py.gz.b64 \
+            | gzip --decompress \
+            > tests/test_openroad_physical.py
+
+      - name: Import the qualified shared-DAG smoke boundary
         run: |
           set -euo pipefail
           git fetch origin research/openroad-registered-smoke
@@ -40,91 +55,11 @@ jobs:
           done
           chmod +x flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py
 
-      - name: Assemble the implementation
-        run: |
-          set -euo pipefail
-          cat .github/openroad-physical-parts/module_*.part \
-            > src/hephaestus/openroad_physical.py
-          cat .github/openroad-physical-parts/tests_*.part \
-            > tests/test_openroad_physical.py
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path('src/hephaestus/openroad_physical.py')
-          text = path.read_text(encoding='utf-8')
-          replacement = r'''def emit_config(
-              contract: dict[str, Any],
-              *,
-              backend_name: str,
-              backend: dict[str, Any],
-          ) -> str:
-              """Emit one ORFS config while keeping every physical variable common."""
-
-              if backend_name not in _BACKENDS:
-                  raise ValueError(f"unsupported backend: {backend_name}")
-              floorplan = contract["floorplan"]
-              routing = contract["routing"]
-              clock = contract["clock"]
-              die = " ".join(
-                  f"{float(value):.9g}" for value in floorplan["die_area_um"]
-              )
-              core = " ".join(
-                  f"{float(value):.9g}" for value in floorplan["core_area_um"]
-              )
-              lines = [
-                  f"export PLATFORM = {contract['platform']}",
-                  f"export DESIGN_NAME = {backend['wrapper_module']}",
-                  f"export DESIGN_NICKNAME = hephaestus_registered_{backend_name}",
-                  "",
-                  (
-                      "export VERILOG_FILES = "
-                      f"$(HEPHAESTUS_REGISTERED_DIR)/{backend['core_rtl']} \\\\"
-                  ),
-                  (
-                      "                       "
-                      f"$(HEPHAESTUS_REGISTERED_DIR)/{backend['wrapper_rtl']}"
-                  ),
-                  "export SDC_FILE = $(dir $(DESIGN_CONFIG))/constraint.sdc",
-                  "export RULES_JSON = $(dir $(DESIGN_CONFIG))/rules.json",
-                  "export SYNTH_SCRIPT = $(dir $(DESIGN_CONFIG))/synth_compat.tcl",
-                  (
-                      "export YOSYS_DEPENDENCIES += $(SYNTH_SCRIPT) "
-                      "$(dir $(DESIGN_CONFIG))/sanitize_yosys_netlist.py"
-                  ),
-                  "",
-                  f"export CLOCK_PORT = {clock['port']}",
-                  f"export CLOCK_PERIOD = {float(clock['period_ns']):.9g}",
-                  f"export DIE_AREA = {die}",
-                  f"export CORE_AREA = {core}",
-                  f"export PLACE_DENSITY = {float(floorplan['place_density']):.9g}",
-                  f"export MIN_ROUTING_LAYER = {routing['minimum_layer']}",
-                  f"export MAX_ROUTING_LAYER = {routing['maximum_layer']}",
-                  f"export NUM_CORES = {int(contract['openroad_threads'])}",
-                  "export LEC_CHECK = 0",
-                  "",
-              ]
-              return "\n".join(lines)
-          '''.replace('          ', '')
-          pattern = re.compile(
-              r'def emit_config\(.*?\n(?=def prepare_physical_evidence\()',
-              re.DOTALL,
-          )
-          text, count = pattern.subn(
-              lambda _: replacement + '\n\n',
-              text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit(f'could not replace emit_config exactly once: {count}')
-          path.write_text(text, encoding='utf-8')
-          PY
-
-      - name: Format and test the assembled source
+      - name: Install, format, and verify the permanent source
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
-          ruff check --fix --ignore E501 \
+          ruff check --fix \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
@@ -134,7 +69,7 @@ jobs:
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
             flows/openroad/registered_shared_dag/validate_smoke_reference.py
-          ruff check --ignore E501 \
+          ruff check \
             src/hephaestus/openroad_physical.py \
             tests/test_openroad_physical.py \
             flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
@@ -151,32 +86,25 @@ jobs:
           python flows/openroad/registered_shared_dag/validate_smoke_reference.py \
             --self-test
 
-      - name: Package the complete source tree
+      - name: Remove fragment and payload staging directories
         run: |
           set -euo pipefail
-          output=build/openroad-physical-assembly
-          mkdir -p "$output/src/hephaestus" "$output/tests" \
-            "$output/configs/physical" "$output/benchmarks/reference" \
-            "$output/flows/openroad"
-          cp src/hephaestus/openroad_physical.py \
-            "$output/src/hephaestus/openroad_physical.py"
-          cp tests/test_openroad_physical.py \
-            "$output/tests/test_openroad_physical.py"
-          cp configs/physical/ihp_sg13g2_openroad_registered_v1.json \
-            "$output/configs/physical/ihp_sg13g2_openroad_registered_v1.json"
-          cp benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
-            "$output/benchmarks/reference/"
-          cp -R flows/openroad/registered_shared_dag \
-            "$output/flows/openroad/"
-          find "$output" -type f -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            > "$output/SHA256SUMS"
+          rm -rf \
+            .github/openroad-physical-parts \
+            .github/openroad-physical-payload
 
-      - name: Upload the assembled source tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: hephaestus-openroad-physical-assembled-source
-          path: build/openroad-physical-assembly
-          if-no-files-found: error
-          retention-days: 14
+      - name: Commit the permanent non-workflow source tree
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py \
+            configs/physical/ihp_sg13g2_openroad_registered_v1.json \
+            benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            flows/openroad/registered_shared_dag \
+            .github/openroad-physical-parts \
+            .github/openroad-physical-payload
+          git commit -m 'Materialize matched OpenROAD physical evidence source'
+          git push origin HEAD:feat/openroad-physical-evidence
