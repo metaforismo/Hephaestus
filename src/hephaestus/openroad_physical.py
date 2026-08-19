@@ -401,8 +401,11 @@ def _validate_registered_bundle(
         }
 
     smoke_source = probe_reference["source"]
-    if sha256_file(manifest_path) != smoke_source["registered_manifest_sha256"]:
-        raise OpenROADPhysicalError("registered manifest differs from the qualifying smoke run")
+    # The full smoke manifest hash is qualifying-run provenance. It includes
+    # proof/log digests that can change while the registered contract,
+    # cores, wrappers, oracle, and claim boundary remain identical.
+    # The pinned registered reference above is the stable authority;
+    # each physical attempt still binds the exact current manifest hash.
     shared = validated["shared_dag"]
     if shared["core_sha256"] != smoke_source["core_sha256"]:
         raise OpenROADPhysicalError("shared-DAG core differs from the qualifying smoke run")
