@@ -11,6 +11,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  ORFS_IMAGE: openroad/orfs@sha256:73bd87efa06758865277f347fbc6b932642d8ab21a5430c5ce5480aaa60c27d0
+
 jobs:
   shared-dag-smoke:
     if: >-
@@ -37,12 +40,17 @@ jobs:
       - name: Install Hephaestus
         run: python -m pip install -e '.[dev]'
 
-      - name: Test the OpenSTA compatibility transform
+      - name: Test the physical compatibility and reference validators
         run: |
-          ruff check flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py
+          ruff check \
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           ruff format --check \
-            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py
+            flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            flows/openroad/registered_shared_dag/validate_smoke_reference.py
           python flows/openroad/registered_shared_dag/sanitize_yosys_netlist.py \
+            --self-test
+          python flows/openroad/registered_shared_dag/validate_smoke_reference.py \
             --self-test
 
       - name: Rebuild and prove the registered source bundle
@@ -101,22 +109,22 @@ jobs:
           )
           PY
 
-      - name: Pull and capture the official ORFS image
+      - name: Pull and capture the pinned ORFS image
         run: |
           set -euo pipefail
           mkdir -p build/openroad-smoke/provenance
-          docker pull openroad/orfs:latest
-          docker image inspect openroad/orfs:latest \
+          docker pull "$ORFS_IMAGE"
+          docker image inspect "$ORFS_IMAGE" \
             > build/openroad-smoke/provenance/orfs-image-inspect.json
           docker image inspect \
             --format '{{json .RepoDigests}}' \
-            openroad/orfs:latest \
+            "$ORFS_IMAGE" \
             > build/openroad-smoke/provenance/orfs-image-repodigests.json
           docker image inspect \
             --format '{{.Id}}' \
-            openroad/orfs:latest \
+            "$ORFS_IMAGE" \
             > build/openroad-smoke/provenance/orfs-image-id.txt
-          docker run --rm openroad/orfs:latest bash -lc '
+          docker run --rm "$ORFS_IMAGE" bash -lc '
             set -e
             source /OpenROAD-flow-scripts/env.sh
             printf "orfs_commit="
@@ -145,7 +153,7 @@ jobs:
             -v "$PWD/build/openroad-smoke/reports:/OpenROAD-flow-scripts/flow/reports" \
             -v "$PWD/build/openroad-smoke/logs:/OpenROAD-flow-scripts/flow/logs" \
             -v "$PWD/build/openroad-smoke/objects:/OpenROAD-flow-scripts/flow/objects" \
-            openroad/orfs:latest bash -lc '
+            "$ORFS_IMAGE" bash -lc '
               set -euo pipefail
               source /OpenROAD-flow-scripts/env.sh
               cd /OpenROAD-flow-scripts/flow
@@ -165,7 +173,7 @@ jobs:
           printf 'returncode=%s\n' "$returncode" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Preserve synthesized-netlist diagnostics
+      - name: Preserve focused physical diagnostics
         if: always()
         run: |
           set -euo pipefail
@@ -179,88 +187,46 @@ jobs:
             | sort \
             > "$diagnostics/file-inventory.tsv"
 
-          mapfile -t netlists < <(
-            find build/openroad-smoke/results \
-              -type f \
-              -name '1_2_yosys.v' \
-              | sort
-          )
-          printf '%s\n' "${netlists[@]:-}" \
-            > "$diagnostics/synthesized-netlist-paths.txt"
-
-          if [ "${#netlists[@]}" -eq 1 ]; then
-            netlist=${netlists[0]}
-            cp "$netlist" "$diagnostics/1_2_yosys.v"
-            sha256sum "$netlist" \
-              | tee "$diagnostics/1_2_yosys.sha256"
-            file "$netlist" \
-              | tee "$diagnostics/1_2_yosys.file.txt"
-            nl -ba "$netlist" \
-              | sed -n '1,100p' \
-              | tee "$diagnostics/1_2_yosys.lines-1-100.txt"
-
-            NETLIST="$netlist" python - <<'PY' \
-              | tee "$diagnostics/1_2_yosys.line-bytes.txt"
-          import os
-          from pathlib import Path
-
-          path = Path(os.environ['NETLIST'])
-          raw = path.read_bytes()
-          lines = raw.splitlines(keepends=True)
-          print(f'path={path}')
-          print(f'bytes={len(raw)}')
-          print(f'line_count={len(lines)}')
-          for number in range(1, min(len(lines), 40) + 1):
-              value = lines[number - 1]
-              print(f'{number:04d}: repr={value!r}')
-              if number == 17:
-                  print(f'0017-hex={value.hex()}')
-          PY
-
-            set +e
-            iverilog -g2012 -tnull -i "$netlist" \
-              > "$diagnostics/iverilog.stdout.txt" \
-              2> "$diagnostics/iverilog.stderr.txt"
-            printf '%s\n' "$?" \
-              > "$diagnostics/iverilog.returncode.txt"
-            yosys -Q -p "read_verilog -sv $netlist" \
-              > "$diagnostics/yosys-read.stdout.txt" \
-              2> "$diagnostics/yosys-read.stderr.txt"
-            printf '%s\n' "$?" \
-              > "$diagnostics/yosys-read.returncode.txt"
-            set -e
-          else
-            printf 'expected one synthesized netlist, found %s\n' \
-              "${#netlists[@]}" \
-              | tee "$diagnostics/netlist-count-error.txt"
-          fi
-
-          mapfile -t compatibility_manifests < <(
-            find build/openroad-smoke/results \
-              -type f \
-              -name '1_2_yosys.opensta_compat.json' \
-              | sort
-          )
-          printf '%s\n' "${compatibility_manifests[@]:-}" \
-            > "$diagnostics/opensta-compat-manifest-paths.txt"
-          if [ "${#compatibility_manifests[@]}" -eq 1 ]; then
-            cp "${compatibility_manifests[0]}" \
-              "$diagnostics/1_2_yosys.opensta_compat.json"
-          fi
+          for pattern in \
+            '1_2_yosys.v' \
+            '1_2_yosys.v.pre-opensta-compat' \
+            '1_2_yosys.opensta_compat.json' \
+            '6_final.gds' \
+            '6_final.def' \
+            '6_final.odb' \
+            '6_final.v' \
+            '6_final.spef' \
+            '6_final.sdc' \
+            'route.guide' \
+            '6_report.json'; do
+            find build/openroad-smoke -type f -name "$pattern" -print \
+              >> "$diagnostics/selected-artifact-paths.txt" || true
+          done
 
           tail -n 300 build/openroad-smoke/orfs.stdout.txt \
             > "$diagnostics/orfs.stdout.tail.txt" || true
           tail -n 300 build/openroad-smoke/orfs.stderr.txt \
             > "$diagnostics/orfs.stderr.tail.txt" || true
 
-      - name: Upload the complete diagnostic bundle
+      - name: Validate the exact pinned smoke reference
+        if: steps.orfs.outputs.returncode == '0'
+        run: |
+          python flows/openroad/registered_shared_dag/validate_smoke_reference.py \
+            --root build/openroad-smoke \
+            --reference \
+              benchmarks/reference/ihp_sg13g2_openroad_registered_shared_dag_smoke_v1.json \
+            --registered build/openroad-smoke/registered \
+            --image-ref "$ORFS_IMAGE" \
+            --out build/openroad-smoke/openroad_smoke_validation.json
+
+      - name: Upload the complete qualified smoke evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hephaestus-openroad-registered-netlist-diagnostic
+          name: hephaestus-openroad-registered-shared-dag-smoke-evidence
           path: build/openroad-smoke
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Fail when the ORFS flow did not complete
         if: always()
