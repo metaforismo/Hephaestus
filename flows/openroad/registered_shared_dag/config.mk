@@ -29,6 +29,12 @@ export PLACE_DENSITY = 0.50
 export MIN_ROUTING_LAYER = Metal2
 export MAX_ROUTING_LAYER = Metal5
 
-# Keep the first experiment deterministic and single-threaded at the OpenROAD
-# command level. Tool-level provenance is captured by the workflow.
-export OPENROAD_THREADS = 1
+# ORFS defaults this developer-only transactional LEC on when its bundled
+# kepler-formal executable exists. That binary terminates with SIGILL on the
+# GitHub runner after CTS timing repair. The probe records this check as not
+# performed and keeps post-physical equivalence as a separate mandatory gate.
+export LEC_CHECK = 0
+
+# Pin the actual ORFS/OpenROAD parallelism knob. OPENROAD_THREADS is not an ORFS
+# flow variable; NUM_CORES controls the thread count passed to OpenROAD.
+export NUM_CORES = 1
