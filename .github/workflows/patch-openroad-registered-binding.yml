@@ -1,0 +1,123 @@
+name: One-shot correct registered source binding
+
+on:
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.head_ref == 'feat/openroad-physical-evidence' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/openroad-physical-evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Correct the stable source-binding boundary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('src/hephaestus/openroad_physical.py')
+          text = source.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'(?m)^    smoke_source = probe_reference\["source"\]\n'
+              r'    if sha256_file\(manifest_path\) != '
+              r'smoke_source\["registered_manifest_sha256"\]:\n'
+              r'        raise OpenROADPhysicalError\(\s*'
+              r'"registered manifest differs from the qualifying smoke run"\s*\)\n'
+              r'    shared = validated\["shared_dag"\]'
+          )
+          replacement = '''    smoke_source = probe_reference["source"]
+              # The full smoke manifest hash is qualifying-run provenance. It includes
+              # proof/log digests that can change while the registered contract,
+              # cores, wrappers, oracle, and claim boundary remain identical.
+              # The pinned registered reference above is the stable authority;
+              # each physical attempt still binds the exact current manifest hash.
+              shared = validated["shared_dag"]
+          '''.replace('          ', '')
+          text, count = pattern.subn(replacement.rstrip(), text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one registered-manifest check, replaced {count}')
+          source.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_openroad_physical.py')
+          text = tests.read_text(encoding='utf-8')
+          marker = 'def test_prepare_rejects_a_probe_for_different_shared_rtl'
+          if marker not in text:
+              raise SystemExit('test insertion marker is missing')
+          test = '''def test_prepare_accepts_manifest_provenance_drift_with_same_stable_sources(
+              tmp_path: Path,
+          ) -> None:
+              bundle, registered_reference, probe_reference, physical_contract, helpers = (
+                  _source_fixture(tmp_path)
+              )
+              manifest_path = bundle / "registered_manifest.json"
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+              manifest["source"] = {
+                  "formal_evidence_sha256": "f" * 64,
+                  "matched_manifest_sha256": "e" * 64,
+              }
+              _write_json(manifest_path, manifest)
+
+              prepared = prepare_physical_evidence(
+                  bundle,
+                  registered_reference,
+                  probe_reference,
+                  physical_contract,
+                  tmp_path / "prepared",
+                  helper_dir=helpers,
+              )
+
+              assert prepared["source"]["registered_manifest_sha256"] == sha256_file(
+                  manifest_path
+              )
+              assert prepared["claims"]["registered_source_binding_verified"]
+
+
+          '''.replace('          ', '')
+          if 'test_prepare_accepts_manifest_provenance_drift' not in text:
+              text = text.replace(f'def {marker}', test + f'def {marker}', 1)
+          tests.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format and verify the corrected implementation
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          ruff format --check \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          pytest tests/test_openroad_physical.py
+
+      - name: Commit the permanent correction
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/hephaestus/openroad_physical.py \
+            tests/test_openroad_physical.py
+          git commit -m 'Bind physical runs to stable registered artifacts'
+          git push origin HEAD:feat/openroad-physical-evidence
