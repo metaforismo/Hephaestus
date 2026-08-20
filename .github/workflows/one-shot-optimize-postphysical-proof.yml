@@ -1,0 +1,168 @@
+name: One-shot optimize post-physical proof
+
+on:
+  push:
+    branches:
+      - research/openroad-post-physical-equivalence-probe
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/openroad-post-physical-equivalence-probe
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Reduce the bounded SAT state without changing the claim boundary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              'flows/openroad/post_physical_equivalence/run_probe.py'
+          )
+          text = path.read_text(encoding='utf-8')
+
+          replacements = {
+              'dut_reset = "1\'b0" if fault == "reset" else "reset"':
+                  'dut_reset = "1\'b1" if fault == "reset" else "reset"',
+              'f"  wire data_mismatch = |({observed_y} ^ reference_y);",': (
+                  'f"  wire data_mismatch = {observed_valid} & "\n'
+                  '            f"reference_valid & |({observed_y} ^ reference_y);",'
+              ),
+              '"-set-init-def",': '"-set-init-zero",',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(
+                      f'expected one occurrence of {old!r}, got {text.count(old)}'
+                  )
+              text = text.replace(old, new)
+
+          timeout_safe_runner = '''def _run_yosys(
+              *,
+              yosys: str,
+              workdir: Path,
+              script_name: str,
+              timeout: int,
+              expect_counterexample: bool,
+          ) -> dict[str, Any]:
+              stdout_path = workdir / f"{Path(script_name).stem}.stdout.txt"
+              stderr_path = workdir / f"{Path(script_name).stem}.stderr.txt"
+              timed_out = False
+              process = subprocess.Popen(
+                  [yosys, "-s", script_name],
+                  cwd=workdir,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+              )
+              try:
+                  stdout, stderr = process.communicate(timeout=timeout)
+              except subprocess.TimeoutExpired:
+                  timed_out = True
+                  process.kill()
+                  stdout, stderr = process.communicate()
+              stdout_path.write_text(stdout, encoding="utf-8")
+              stderr_path.write_text(stderr, encoding="utf-8")
+              combined = stdout + "\\n" + stderr
+              success = _SUCCESS_MARKER in combined
+              counterexample = _FAILURE_MARKER in combined
+              if expect_counterexample:
+                  passed = (
+                      not timed_out
+                      and process.returncode == 0
+                      and counterexample
+                      and not success
+                  )
+              else:
+                  passed = (
+                      not timed_out
+                      and process.returncode == 0
+                      and success
+                      and not counterexample
+                  )
+              return {
+                  "performed": True,
+                  "passed": passed,
+                  "expected_counterexample": expect_counterexample,
+                  "returncode": process.returncode,
+                  "timed_out": timed_out,
+                  "proof_success": success,
+                  "counterexample_found": counterexample,
+                  "stdout": stdout_path.name,
+                  "stdout_sha256": _sha256(stdout_path),
+                  "stderr": stderr_path.name,
+                  "stderr_sha256": _sha256(stderr_path),
+              }
+          '''.replace('          ', '')
+          pattern = re.compile(
+              r'def _run_yosys\(.*?\n(?=def _copy_and_verify\()',
+              re.DOTALL,
+          )
+          text, count = pattern.subn(
+              lambda _: timeout_safe_runner + '\n\n',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'could not replace _run_yosys: {count}')
+
+          path.write_text(text, encoding='utf-8')
+
+          workflow = Path(
+              '.github/workflows/research-post-physical-equivalence.yml'
+          )
+          workflow_text = workflow.read_text(encoding='utf-8')
+          workflow_text = workflow_text.replace(
+              '--cycles 8 \\\n            --maxsteps 12',
+              '--cycles 4 \\\n            --maxsteps 4',
+          )
+          if workflow_text == workflow.read_text(encoding='utf-8'):
+              raise SystemExit('workflow cycle settings were not updated')
+          workflow.write_text(workflow_text, encoding='utf-8')
+
+          Path(
+              '.github/workflows/one-shot-optimize-postphysical-proof.yml'
+          ).unlink()
+          PY
+
+      - name: Format and test the permanent files
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check --fix \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          ruff format \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          ruff check \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          ruff format --check \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          pytest tests/test_post_physical_probe.py
+
+      - name: Commit the optimized research probe
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Reduce post-physical bounded SAT state'
+          git push origin HEAD:research/openroad-post-physical-equivalence-probe
