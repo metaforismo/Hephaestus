@@ -36,59 +36,53 @@ jobs:
 
           source = Path('src/hephaestus/openroad_physical.py')
           text = source.read_text(encoding='utf-8')
-          old = '''        tokens = set(_METRIC_TOKEN_RE.findall(prefix.lower()))
-              if tokens.intersection(_UNSTABLE_METRIC_WORDS):
-                  return
-              if not tokens.intersection(_STABLE_METRIC_WORDS):
-          '''.replace('          ', '')
-          new = '''        lowered_prefix = prefix.lower()
-              # ORFS FastRoute writes internal wall-clock phase durations with a
-              # trailing `_s`. They are execution provenance, not physical QoR.
-              if lowered_prefix.endswith("_s"):
-                  return
-              tokens = set(_METRIC_TOKEN_RE.findall(lowered_prefix))
-              if tokens.intersection(_UNSTABLE_METRIC_WORDS):
-                  return
-              if not tokens.intersection(_STABLE_METRIC_WORDS):
-          '''.replace('          ', '')
-          if text.count(old) != 1:
+          needle = '        tokens = set(_METRIC_TOKEN_RE.findall(prefix.lower()))'
+          replacement = '\n'.join(
+              [
+                  '        lowered_prefix = prefix.lower()',
+                  '        # ORFS FastRoute writes internal wall-clock phase durations with a',
+                  '        # trailing `_s`. They are execution provenance, not physical QoR.',
+                  '        if lowered_prefix.endswith("_s"):',
+                  '            return',
+                  '        tokens = set(_METRIC_TOKEN_RE.findall(lowered_prefix))',
+              ]
+          )
+          if text.count(needle) != 1:
               raise SystemExit(
-                  f'expected one stable-metric selector block, found {text.count(old)}'
+                  f'expected one stable-metric selector line, found {text.count(needle)}'
               )
-          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+          source.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
 
           tests = Path('tests/test_openroad_physical.py')
           text = tests.read_text(encoding='utf-8')
-          old = '''            "run__runtime__seconds": 91.0,
-              "tool__version": "x",
-          '''.replace('          ', '')
-          new = '''            "run__runtime__seconds": 91.0,
-              "globalroute__global_route__fastroute__route_l_s": 0.0006,
-              "tool__version": "x",
-          '''.replace('          ', '')
-          if text.count(old) != 1:
+          needle = '            "run__runtime__seconds": 91.0,'
+          inserted = (
+              needle
+              + '\n'
+              + '            "globalroute__global_route__fastroute__route_l_s": 0.0006,'
+          )
+          if text.count(needle) != 1:
               raise SystemExit(
-                  f'expected one metadata-noise fixture block, found {text.count(old)}'
+                  f'expected one metadata-noise fixture line, found {text.count(needle)}'
               )
-          tests.write_text(text.replace(old, new, 1), encoding='utf-8')
+          tests.write_text(text.replace(needle, inserted, 1), encoding='utf-8')
 
           docs = Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md')
           text = docs.read_text(encoding='utf-8')
-          old = (
+          marker = (
               'quality-of-result fields are retained separately from runtime, host, timestamp, '
               'and version noise.\n'
           )
-          new = (
-              'quality-of-result fields are retained separately from runtime, host, timestamp, '
-              'and version noise.\n'
-              'FastRoute phase-duration fields ending in `_s` are classified as execution '
-              'provenance, not\nphysical QoR.\n'
+          addition = (
+              marker
+              + 'FastRoute phase-duration fields ending in `_s` are classified as execution '
+              + 'provenance, not\nphysical QoR.\n'
           )
-          if text.count(old) != 1:
+          if text.count(marker) != 1:
               raise SystemExit(
-                  f'expected one metadata documentation sentence, found {text.count(old)}'
+                  f'expected one metadata documentation sentence, found {text.count(marker)}'
               )
-          docs.write_text(text.replace(old, new, 1), encoding='utf-8')
+          docs.write_text(text.replace(marker, addition, 1), encoding='utf-8')
           PY
 
       - name: Format and verify the correction
