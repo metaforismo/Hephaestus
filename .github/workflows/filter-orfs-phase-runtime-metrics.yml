@@ -66,23 +66,6 @@ jobs:
                   f'expected one metadata-noise fixture line, found {text.count(needle)}'
               )
           tests.write_text(text.replace(needle, inserted, 1), encoding='utf-8')
-
-          docs = Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md')
-          text = docs.read_text(encoding='utf-8')
-          marker = (
-              'quality-of-result fields are retained separately from runtime, host, timestamp, '
-              'and version noise.\n'
-          )
-          addition = (
-              marker
-              + 'FastRoute phase-duration fields ending in `_s` are classified as execution '
-              + 'provenance, not\nphysical QoR.\n'
-          )
-          if text.count(marker) != 1:
-              raise SystemExit(
-                  f'expected one metadata documentation sentence, found {text.count(marker)}'
-              )
-          docs.write_text(text.replace(marker, addition, 1), encoding='utf-8')
           PY
 
       - name: Format and verify the correction
@@ -108,7 +91,6 @@ jobs:
           git rm -- .github/workflows/filter-orfs-phase-runtime-metrics.yml
           git add \
             src/hephaestus/openroad_physical.py \
-            tests/test_openroad_physical.py \
-            docs/OPENROAD_PHYSICAL_EVIDENCE.md
+            tests/test_openroad_physical.py
           git commit -m 'Exclude ORFS phase runtimes from repeatability'
           git push origin HEAD:feat/openroad-physical-evidence
