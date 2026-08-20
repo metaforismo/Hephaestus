@@ -114,9 +114,7 @@ def _validate_physical_evidence(
         "physical_repeatability_verified",
         "common_physical_boundary_verified",
     )
-    if not isinstance(claims, dict) or any(
-        claims.get(name) is not True for name in required_true
-    ):
+    if not isinstance(claims, dict) or any(claims.get(name) is not True for name in required_true):
         raise PostPhysicalError("physical evidence prerequisites are incomplete")
     if claims.get("post_physical_equivalence_verified") is not False:
         raise PostPhysicalError(
@@ -425,9 +423,7 @@ def build_probe(
     contract = prepared.get("contract", {}).get("value")
     if not isinstance(contract, dict):
         raise PostPhysicalError("prepared physical contract is malformed")
-    registered_manifest = _load_json(
-        root / "prepared" / "registered" / "registered_manifest.json"
-    )
+    registered_manifest = _load_json(root / "prepared" / "registered" / "registered_manifest.json")
     registered_contract = registered_manifest.get("contract")
     if not isinstance(registered_contract, dict):
         raise PostPhysicalError("registered contract is malformed")
@@ -476,11 +472,7 @@ def build_probe(
             final_verilog.get("sha256"),
             context=f"{backend_name}.final_verilog",
         )
-        attempt_root = (
-            root
-            / "downloaded-runs"
-            / f"openroad-physical-run-{backend_name}-1"
-        )
+        attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend_name}-1"
         routed_source = _resolve_under(
             attempt_root,
             str(final_verilog.get("path")),
@@ -494,10 +486,13 @@ def build_probe(
             backend_prepared.get("wrapper_module"),
             context=f"{backend_name}.wrapper_module",
         )
-        if _extract_module_name(
-            routed_source.read_text(encoding="utf-8"),
-            context=f"{backend_name} routed Verilog",
-        ) != routed_module:
+        if (
+            _extract_module_name(
+                routed_source.read_text(encoding="utf-8"),
+                context=f"{backend_name} routed Verilog",
+            )
+            != routed_module
+        ):
             raise PostPhysicalError(f"{backend_name} routed top module differs")
 
         backend_dir = output / "backends" / backend_name
@@ -616,21 +611,16 @@ def build_probe(
         "bounded_reset_recovery_equivalence_verified": all_positive_bounded,
         "steady_state_temporal_induction_verified": all_positive_inductive,
         "data_fault_counterexample_found": all(
-            value["negative_controls"]["data"]["passed"]
-            for value in backends.values()
+            value["negative_controls"]["data"]["passed"] for value in backends.values()
         ),
         "valid_latency_fault_counterexample_found": all(
-            value["negative_controls"]["valid"]["passed"]
-            for value in backends.values()
+            value["negative_controls"]["valid"]["passed"] for value in backends.values()
         ),
         "reset_fault_counterexample_found": all(
-            value["negative_controls"]["reset"]["passed"]
-            for value in backends.values()
+            value["negative_controls"]["reset"]["passed"] for value in backends.values()
         ),
         "post_physical_equivalence_verified": (
-            all_positive_bounded
-            and all_positive_inductive
-            and all_negative_controls
+            all_positive_bounded and all_positive_inductive and all_negative_controls
         ),
         "comparative_ppa_claim_enabled": False,
         "four_state_semantics_verified": False,
@@ -644,9 +634,7 @@ def build_probe(
     }
     evidence = {
         "schema": "hephaestus.post-physical-equivalence-probe.v1",
-        "evidence_level": (
-            "bounded_reset_recovery_and_zero_init_temporal_induction_research"
-        ),
+        "evidence_level": ("bounded_reset_recovery_and_zero_init_temporal_induction_research"),
         "source": {
             "physical_evidence": source_physical.name,
             "physical_evidence_sha256": _sha256(source_physical),
@@ -677,9 +665,7 @@ def build_probe(
     if not all_positive_bounded:
         raise PostPhysicalError("one or more bounded positive proofs failed")
     if not all_negative_controls:
-        raise PostPhysicalError(
-            "one or more negative controls failed to produce a counterexample"
-        )
+        raise PostPhysicalError("one or more negative controls failed to produce a counterexample")
     return evidence
 
 
