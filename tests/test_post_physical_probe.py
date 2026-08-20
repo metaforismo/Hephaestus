@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+# Keep the research harness outside the installed package API until its proof
+# composition is qualified and reimplemented as permanent evidence.
 MODULE_PATH = (
     Path(__file__).parents[1] / "flows" / "openroad" / "post_physical_equivalence" / "run_probe.py"
 )
