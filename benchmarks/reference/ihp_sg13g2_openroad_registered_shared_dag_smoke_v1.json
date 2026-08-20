@@ -1,0 +1,185 @@
+{
+  "artifacts": {
+    "final_def": {
+      "sha256": "7431f1ed67a9f316f07d98a8bf57f61acd271be3c95885a71ab3f8ca36306fcf",
+      "size_bytes": 1184080
+    },
+    "final_gds": {
+      "sha256": "c138c951498695f61cf5dda2aeae46f86599c0fc5052364ddb0b0ce5814f550e",
+      "size_bytes": 1379218
+    },
+    "final_open_db": {
+      "sha256": "77bc19d1a7f47cd4cc739623ff4939060df20b8fc945f50429cfd55de5b9b350",
+      "size_bytes": 2522607
+    },
+    "final_sdc": {
+      "sha256": "7920a145c5bb650d328165b827681ddd9be4168bf08ed509353c39cd73793b74",
+      "size_bytes": 19227
+    },
+    "final_spef": {
+      "sha256": "c48abb9eb4d9479a4f99a488f4ba246f6589b88f8800eb8b4dc5070ea5d2a16a",
+      "size_bytes": 845857
+    },
+    "final_verilog": {
+      "sha256": "9a8b0bf370d5a7013dcac059361b9fa36934eefb454b5c661c269c64c949b4fa",
+      "size_bytes": 112890
+    },
+    "route_guide": {
+      "sha256": "a28ece118c05eb23d657b6310b132c11df9e79cc52671e5f3ccf298b8b146067",
+      "size_bytes": 266457
+    }
+  },
+  "case": {
+    "backend": "shared_dag",
+    "initiation_interval_cycles": 1,
+    "matrix": "examples/tiny_weights.json",
+    "registered_latency_cycles": 1,
+    "runtime_coefficient_reads_per_matvec": 0
+  },
+  "claims": {
+    "drc_clean": false,
+    "foundry_signoff_complete": false,
+    "four_nanosecond_target_met_in_qualifying_run": true,
+    "gds_generated": true,
+    "lvs_clean": false,
+    "matched_three_backend_physical_comparison_performed": false,
+    "placement_performed": true,
+    "post_layout_pex_verified": false,
+    "post_physical_equivalence_verified": false,
+    "power_estimated_with_activity": false,
+    "registered_source_binding_verified": true,
+    "routing_performed": true,
+    "silicon_verified": false,
+    "single_backend_orfs_flow_completed": true,
+    "spef_generated": true,
+    "timing_constraints_analyzed": true
+  },
+  "compatibility_transform": {
+    "functional_equivalence_verified_by_transform": false,
+    "line_count_preserved": true,
+    "manifest_sha256": "1885514201759be931db1bfcd5156df835f736f61f75d9268e7141945cd568b1",
+    "only_declaration_signed_tokens_removed": true,
+    "original_netlist": {
+      "sha256": "f94adbc09e2a42e8f61336d13ab83e9a085871de857ed02375565a43d726223e",
+      "size_bytes": 115406
+    },
+    "sanitized_netlist": {
+      "sha256": "a98672258bc9e5d81575b1842fee880a7931f321f0158559502ad7482ab8e78f",
+      "size_bytes": 115382
+    },
+    "schema": "hephaestus.opensta-verilog-compat.v1",
+    "substitution_count": 4
+  },
+  "metrics": {
+    "finish__clock__skew__hold": 0.110776,
+    "finish__clock__skew__setup": 0.107097,
+    "finish__design__core__area": 39249.1,
+    "finish__design__die__area": 57600,
+    "finish__design__instance__area": 16180.8,
+    "finish__design__instance__count": 3741,
+    "finish__design__instance__count__class:clock_buffer": 17,
+    "finish__design__instance__count__class:fill_cell": 2530,
+    "finish__design__instance__count__class:sequential_cell": 96,
+    "finish__design__instance__count__class:timing_repair_buffer": 196,
+    "finish__design__instance__count__stdcell": 1211,
+    "finish__design__instance__utilization": 0.41226,
+    "finish__design__io": 102,
+    "finish__design__nets": 1264,
+    "finish__flow__errors__count": 0,
+    "finish__flow__warnings__count": 2,
+    "finish__timing__drv__hold_violation_count": 0,
+    "finish__timing__drv__setup_violation_count": 0,
+    "finish__timing__fmax": 297951000.0,
+    "finish__timing__hold__tns": 0,
+    "finish__timing__hold__ws": 0.133453,
+    "finish__timing__setup__tns": 0,
+    "finish__timing__setup__ws": 0.643739
+  },
+  "physical_contract": {
+    "backend": "shared_dag",
+    "clock_name": "core_clock",
+    "clock_period_ns": 4.0,
+    "clock_port": "clk",
+    "clock_uncertainty_ns": 0.1,
+    "core_area_um": [
+      20.0,
+      20.0,
+      220.0,
+      220.0
+    ],
+    "die_area_um": [
+      0.0,
+      0.0,
+      240.0,
+      240.0
+    ],
+    "input_delay_ns": 0.2,
+    "input_driver_cell": "sg13g2_buf_4",
+    "max_routing_layer": "Metal5",
+    "min_routing_layer": "Metal2",
+    "output_delay_ns": 0.2,
+    "output_load_pf": 0.01,
+    "place_density": 0.5,
+    "platform": "ihp-sg13g2"
+  },
+  "qualifying_run": {
+    "artifact_id": 9347528965,
+    "artifact_zip_sha256": "f7ecb1ba62a7cf6390cf0277b665f94079cf3ce3d3348ce56732c1b31241b863",
+    "github_head_sha": "1d77d85c18d43934bcb247d113a69a18c78575eb",
+    "github_workflow_run_id": 32200874370,
+    "orfs_returncode": 0
+  },
+  "reference_id": "ihp-sg13g2-openroad-registered-shared-dag-smoke-v1",
+  "schema": "hephaestus.openroad-registered-smoke-reference.v1",
+  "source": {
+    "core_module": "hephaestus_registered_source",
+    "core_rtl": "shared_dag_core.sv",
+    "core_sha256": "e23569c970e65984072d88ddbb5a8217f35f31b5c03e1aa13c3d70fb7c4d34ae",
+    "registered_manifest_sha256": "48bf44f2f81b6b70b11c31a9a4b5ff44450b5d228e892f7d714d05b7a9037527",
+    "wrapper_module": "hephaestus_registered_tile_shared_dag_registered",
+    "wrapper_rtl": "shared_dag_registered.sv",
+    "wrapper_sha256": "dede182145a2ed7e886ba7a78e914c136e808202f5e2633fe7f54942c4c47940"
+  },
+  "stable_signatures": {
+    "def": {
+      "component_count": 3741,
+      "database_units_per_micron": 1000,
+      "die_area_dbu": [
+        0,
+        0,
+        240000,
+        240000
+      ],
+      "die_area_um": [
+        0.0,
+        0.0,
+        240.0,
+        240.0
+      ],
+      "net_count": 1262,
+      "pin_count": 102,
+      "row_statement_count": 52,
+      "special_net_count": 2,
+      "track_statement_count": 14,
+      "via_definition_count": 14
+    },
+    "gds_timestamp_normalized_sha256": "0e0b995933927c2541de7631bd1b6723f261ef7fbdce0c44623f2165b8e3e5f8",
+    "gds_timestamp_records_normalized": 60,
+    "spef_date_normalized_sha256": "938ae0d96e9ad0255020bd2e7323cc55cf44fa0ca795b1d0d51510465d0e8f91",
+    "spef_date_records_normalized": 1
+  },
+  "toolchain": {
+    "num_cores": 1,
+    "orfs_image_created_utc": "2026-08-18T04:55:54.300893555Z",
+    "orfs_image_id": "sha256:61b7586ec3138cb926476d9a71a4b0ff1382f8435ebabdbf49ff4458b92c36e5",
+    "orfs_image_repo_digest": "openroad/orfs@sha256:73bd87efa06758865277f347fbc6b932642d8ab21a5430c5ce5480aaa60c27d0",
+    "tool_versions": {
+      "klayout": "0.30.7",
+      "openroad": "26Q3-1305-gf552262465",
+      "orfs_source_commit_retained_in_image": false,
+      "yosys": "0.68+post"
+    },
+    "tool_versions_sha256": "fff105de08950aa502d14f1b17ed1a4592ff9bd088359710e50292f0e2721464",
+    "transactional_kepler_lec_enabled": false
+  }
+}
