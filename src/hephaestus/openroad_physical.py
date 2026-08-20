@@ -775,7 +775,12 @@ def stable_metadata_metrics(value: dict[str, Any]) -> dict[str, int | float | bo
                 next_prefix = f"{prefix}.{key}" if prefix else str(key)
                 visit(next_prefix, current[key])
             return
-        tokens = set(_METRIC_TOKEN_RE.findall(prefix.lower()))
+        lowered_prefix = prefix.lower()
+        # ORFS FastRoute writes internal wall-clock phase durations with a
+        # trailing `_s`. They are execution provenance, not physical QoR.
+        if lowered_prefix.endswith("_s"):
+            return
+        tokens = set(_METRIC_TOKEN_RE.findall(lowered_prefix))
         if tokens.intersection(_UNSTABLE_METRIC_WORDS):
             return
         if not tokens.intersection(_STABLE_METRIC_WORDS):

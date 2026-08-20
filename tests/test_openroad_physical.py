@@ -344,6 +344,7 @@ def test_metadata_selector_excludes_runtime_noise() -> None:
             "finish__timing__setup__ws": -0.02,
             "finish__route__wirelength": 88,
             "run__runtime__seconds": 91.0,
+            "globalroute__global_route__fastroute__route_l_s": 0.0006,
             "tool__version": "x",
             "design": "name",
         }
