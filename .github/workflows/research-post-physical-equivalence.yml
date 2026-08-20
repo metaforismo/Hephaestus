@@ -1,0 +1,135 @@
+name: Research post-physical sequential equivalence
+
+on:
+  push:
+    branches:
+      - research/openroad-post-physical-equivalence-probe
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  routed-sequential-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install pinned proof tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          yosys -V | tee yosys.version.txt
+
+      - name: Install, lint, and test the probe
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          ruff format --check \
+            flows/openroad/post_physical_equivalence/run_probe.py \
+            tests/test_post_physical_probe.py
+          pytest tests/test_post_physical_probe.py
+          python flows/openroad/post_physical_equivalence/run_probe.py --help
+
+      - name: Download the qualified matched physical evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-ihp-openroad-physical-evidence
+          path: build/post-physical/physical
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: metaforismo/Hephaestus
+          run-id: 32318084066
+
+      - name: Probe all three routed registered backends
+        run: |
+          python flows/openroad/post_physical_equivalence/run_probe.py \
+            build/post-physical/physical \
+            --models \
+              flows/openroad/post_physical_equivalence/ihp_sg13g2_formal_models.v \
+            --out build/post-physical/evidence \
+            --cycles 8 \
+            --maxsteps 12 \
+            --timeout 300
+
+      - name: Record the research claim boundary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(
+              'build/post-physical/evidence/'
+              'post_physical_equivalence_probe.json'
+          )
+          if not path.is_file():
+              print('The probe did not produce a final evidence manifest.')
+              raise SystemExit(0)
+
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          claims = evidence['claims']
+          assert evidence['schema'] == (
+              'hephaestus.post-physical-equivalence-probe.v1'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert claims['comparative_ppa_claim_enabled'] is False
+          assert claims['four_state_semantics_verified'] is False
+          assert claims['timing_annotated_functional_semantics_verified'] is False
+          assert claims['drc_clean'] is False
+          assert claims['lvs_clean'] is False
+          assert claims['post_layout_pex_verified'] is False
+          assert claims['foundry_signoff_complete'] is False
+          assert claims['silicon_verified'] is False
+
+          summary = [
+              '# Post-physical sequential-equivalence research',
+              '',
+              f"- bounded reset recovery: "
+              f"`{claims['bounded_reset_recovery_equivalence_verified']}`",
+              f"- steady-state temporal induction: "
+              f"`{claims['steady_state_temporal_induction_verified']}`",
+              f"- data negative control: "
+              f"`{claims['data_fault_counterexample_found']}`",
+              f"- valid negative control: "
+              f"`{claims['valid_latency_fault_counterexample_found']}`",
+              f"- reset negative control: "
+              f"`{claims['reset_fault_counterexample_found']}`",
+              f"- post-physical equivalence claim: "
+              f"`{claims['post_physical_equivalence_verified']}`",
+          ]
+          Path('build/post-physical/SUMMARY.md').write_text(
+              '\n'.join(summary) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Upload the complete research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-post-physical-sequential-equivalence-probe
+          path: |
+            build/post-physical
+            yosys.version.txt
+          if-no-files-found: error
+          retention-days: 14
