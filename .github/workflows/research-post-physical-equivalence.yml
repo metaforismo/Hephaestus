@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - research/openroad-post-physical-equivalence-probe
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 permissions:
