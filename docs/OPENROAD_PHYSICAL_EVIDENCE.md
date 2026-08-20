@@ -24,15 +24,18 @@ Metal2–Metal5 routing boundary can complete on the IHP SG13G2 ORFS platform.
 
 The smoke reference pins:
 
-- the exact registered manifest, shared-DAG core, and wrapper digests;
+- the qualifying registered-manifest digest as run provenance and the exact shared-DAG core and
+  wrapper digests;
 - the official ORFS image `RepoDigest`, not the mutable `latest` tag;
 - the committed floorplan, timing, I/O, and routing boundary;
 - the exact compatibility-transform manifest used between Yosys and OpenSTA;
 - the final GDS, DEF, mapped Verilog, OpenDB, SPEF, and stable metric observations;
 - a claim boundary that remains explicitly single-backend and non-comparative.
 
-The permanent matched flow refuses to start when the current registered shared-DAG source differs
-from that qualifying smoke source or when any part of the physical contract drifts.
+The permanent matched flow refuses to start when the stable registered contract, code/core/wrapper
+artifacts, shared-DAG smoke source, or any part of the physical contract drifts. The complete current
+registered manifest is still hashed into every prepared bundle and physical run, but its hash is not
+used as a cross-run identity because the manifest also carries proof-log provenance.
 
 ## Common contract
 
@@ -82,16 +85,16 @@ layer.
 - `hephaestus.registered-matched-tiles.v1` and its successful schedule-based claims;
 - the pinned registered regression contract and all six source RTL digests;
 - the qualifying OpenROAD smoke reference;
-- the exact registered-manifest and shared-DAG identities observed by the smoke run;
+- the stable registered reference plus the exact shared-DAG identities observed by the smoke run;
 - one immutable ORFS image digest and the disclosed `NUM_CORES`/LEC settings;
 - the physical contract, including clock, I/O assumptions, floorplan, density, and routing layers;
 - the fail-closed `synth_compat.tcl` and `sanitize_yosys_netlist.py` helper artifacts;
 - safe, in-root, non-symlink artifact paths;
 - zero runtime coefficient reads for every backend.
 
-It then stages the exact registered bundle and emits one ORFS design directory per backend. Only the
-top module and its paired core RTL differ. Timing, floorplan, density, routing, helpers, and tool
-identity are common.
+It then stages the exact current registered bundle, records its complete manifest digest, and emits
+one ORFS design directory per backend. Only the top module and its paired core RTL differ. Timing,
+floorplan, density, routing, helpers, and tool identity are common.
 
 ## Physical attempts
 
@@ -123,7 +126,8 @@ metadata.json
 Every file is recorded with its byte size and SHA-256 digest. The final DEF is also parsed for die
 geometry, component count, net count, special-net count, pin count, rows, tracks, and via
 definitions. Numeric ORFS quality-of-result fields are retained separately from runtime, host,
-timestamp, memory, and version noise.
+timestamp, memory, and version noise. FastRoute phase-duration fields ending in `_s` are classified
+as execution provenance, not physical QoR.
 
 The Yosys/OpenSTA compatibility transform preserves the original synthesized netlist, removes only
 supported declaration-level `signed` tokens, records both hashes, preserves line count, and fails on
