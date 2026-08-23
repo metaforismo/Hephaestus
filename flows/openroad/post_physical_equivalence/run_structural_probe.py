@@ -321,11 +321,7 @@ def build_probe(
                 raise StructuralProbeError(
                     f"{backend} attempt {attempt} routed-Verilog metadata is missing"
                 )
-            attempt_root = (
-                root
-                / "downloaded-runs"
-                / f"openroad-physical-run-{backend}-{attempt}"
-            )
+            attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
             routed = exactly_one(attempt_root, "6_final.v")
             expected_routed = routed_meta.get("sha256")
             actual_routed = sha256(routed)
