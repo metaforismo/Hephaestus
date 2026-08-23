@@ -1,0 +1,74 @@
+name: Post-physical structural equivalence probe
+
+on:
+  push:
+    branches:
+      - research/postphysical-equiv-structural-v2
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-source-vs-routed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install proof tools and project dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          python -m pip install -e '.[dev]'
+          yosys -V | tee build-yosys-version.txt
+
+      - name: Lint and parse the structural probe
+        run: |
+          ruff check \
+            flows/openroad/post_physical_equivalence/run_structural_probe.py
+          ruff format --check \
+            flows/openroad/post_physical_equivalence/run_structural_probe.py
+          python flows/openroad/post_physical_equivalence/run_structural_probe.py \
+            --help
+
+      - name: Download the qualified matched physical bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-ihp-openroad-physical-evidence
+          path: build/postphysical-structural/physical
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: metaforismo/Hephaestus
+          run-id: 32318084066
+
+      - name: Compare exact registered sources with routed netlists
+        run: |
+          python flows/openroad/post_physical_equivalence/run_structural_probe.py \
+            build/postphysical-structural/physical \
+            --models \
+              flows/openroad/post_physical_equivalence/ihp_sg13g2_formal_models.v \
+            --out build/postphysical-structural/evidence \
+            --timeout 180
+
+      - name: Upload complete proof diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-postphysical-structural-probe
+          path: |
+            build/postphysical-structural
+            build-yosys-version.txt
+          if-no-files-found: error
+          retention-days: 14
