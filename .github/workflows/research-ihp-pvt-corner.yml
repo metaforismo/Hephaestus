@@ -1,0 +1,231 @@
+name: Research IHP routed PVT corner timing
+
+on:
+  push:
+    branches:
+      - research/ihp-pvt-corner-probe
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  IHP_OPEN_PDK_COMMIT: 22f2a25f1734796de3debbbf29cf697cbbc54081
+  PHYSICAL_WORKFLOW_RUN_ID: '32318084066'
+
+jobs:
+  routed-pvt-corner-probe:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.head_ref == 'research/ihp-pvt-corner-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install OpenSTA build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            flex \
+            git \
+            libeigen3-dev \
+            libfl-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev
+
+      - name: Install, lint, and test the research probe
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check \
+            flows/openroad/pvt_corner/run_probe.py \
+            tests/test_pvt_corner_probe.py
+          ruff format --check \
+            flows/openroad/pvt_corner/run_probe.py \
+            tests/test_pvt_corner_probe.py
+          pytest tests/test_pvt_corner_probe.py
+          python flows/openroad/pvt_corner/run_probe.py --help
+
+      - name: Build the repository-pinned OpenSTA executable
+        run: |
+          set -euo pipefail
+          bash scripts/build_pinned_opensta.sh build/pvt-corner/tooling
+          test -x build/pvt-corner/tooling/opensta.bin
+          build/pvt-corner/tooling/opensta.bin -version \
+            | tee build/pvt-corner/tooling/opensta.version.txt
+          sha256sum build/pvt-corner/tooling/opensta.bin \
+            | tee build/pvt-corner/tooling/opensta.sha256
+
+      - name: Checkout the pinned official IHP Open PDK
+        run: |
+          set -euo pipefail
+          mkdir -p build/pvt-corner
+          git clone \
+            --filter=blob:none \
+            --no-checkout \
+            https://github.com/IHP-GmbH/IHP-Open-PDK.git \
+            build/pvt-corner/ihp-open-pdk
+          git -C build/pvt-corner/ihp-open-pdk \
+            fetch --depth 1 origin "$IHP_OPEN_PDK_COMMIT"
+          git -C build/pvt-corner/ihp-open-pdk \
+            checkout --detach "$IHP_OPEN_PDK_COMMIT"
+          test "$(git -C build/pvt-corner/ihp-open-pdk rev-parse HEAD)" = \
+            "$IHP_OPEN_PDK_COMMIT"
+          find build/pvt-corner/ihp-open-pdk \
+            -type f \
+            -name '*.lib' \
+            -printf '%P\t%s bytes\n' \
+            | sort \
+            | tee build/pvt-corner/liberty-inventory.tsv
+
+      - name: Download the qualified matched physical evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-ihp-openroad-physical-evidence
+          path: build/pvt-corner/physical
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: metaforismo/Hephaestus
+          run-id: ${{ env.PHYSICAL_WORKFLOW_RUN_ID }}
+
+      - name: Run all three backends across slow, typical, and fast corners
+        run: |
+          set -euo pipefail
+          python flows/openroad/pvt_corner/run_probe.py \
+            build/pvt-corner/physical \
+            --pdk build/pvt-corner/ihp-open-pdk \
+            --opensta build/pvt-corner/tooling/opensta.bin \
+            --expected-pdk-commit "$IHP_OPEN_PDK_COMMIT" \
+            --out build/pvt-corner/evidence \
+            --timeout 600 \
+            --negative-period-ns 0.05
+
+      - name: Validate the research claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('build/pvt-corner/evidence/pvt_corner_research.json')
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.ihp-pvt-corner-research.v1'
+          assert evidence['corner_order'] == ['slow', 'typ', 'fast']
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          for backend in evidence['backends'].values():
+              assert set(backend['corners']) == {'slow', 'typ', 'fast'}
+              assert all(
+                  corner['repeatability_verified']
+                  and len(corner['attempts']) == 2
+                  for corner in backend['corners'].values()
+              )
+              assert backend['negative_control']['timing_violation_observed']
+              assert (
+                  backend['negative_control']['analysis']['metrics'][
+                      'worst_setup_slack_ns'
+                  ]
+                  < 0
+              )
+          assert evidence['claims'] == {
+              'physical_evidence_prerequisite_verified': True,
+              'routed_netlists_bound_by_digest': True,
+              'routed_spef_bound_by_digest': True,
+              'official_ihp_open_pdk_commit_pinned': True,
+              'three_liberty_corners_bound_by_digest': True,
+              'all_backend_corner_analyses_completed': True,
+              'two_attempt_repeatability_verified': True,
+              'tight_clock_negative_control_violated': True,
+              'multi_corner_timing_observed': True,
+              'comparative_pvt_claim_enabled': False,
+              'ocv_aocv_pocv_analyzed': False,
+              'statistical_variation_analyzed': False,
+              'crosstalk_delay_analyzed': False,
+              'foundry_signoff_sta_performed': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          PY
+
+      - name: Write a human-readable result summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence_path = Path(
+              'build/pvt-corner/evidence/pvt_corner_research.json'
+          )
+          lines = ['# IHP routed PVT corner research', '']
+          if not evidence_path.is_file():
+              lines.append('The probe did not produce a final evidence manifest.')
+          else:
+              evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
+              lines.extend(
+                  [
+                      f"- PDK commit: `{evidence['toolchain']['ihp_open_pdk_commit']}`",
+                      f"- OpenSTA: `{evidence['toolchain']['opensta_version']}`",
+                      '',
+                      '| Backend | Slow slack | Typ slack | Fast slack |',
+                      '|---|---:|---:|---:|',
+                  ]
+              )
+              for name, backend in evidence['backends'].items():
+                  values = [
+                      backend['corners'][label]['metrics'][
+                          'worst_setup_slack_ns'
+                      ]
+                      for label in ('slow', 'typ', 'fast')
+                  ]
+                  lines.append(
+                      f"| `{name}` | {values[0]:.6f} ns | "
+                      f"{values[1]:.6f} ns | {values[2]:.6f} ns |"
+                  )
+              lines.extend(
+                  [
+                      '',
+                      'This is a deterministic three-corner research result, '
+                      'not foundry-signoff STA or statistical variation analysis.',
+                  ]
+              )
+          Path('build/pvt-corner/SUMMARY.md').write_text(
+              '\n'.join(lines) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Upload the complete PVT research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-routed-pvt-corner-research
+          path: |
+            build/pvt-corner/evidence
+            build/pvt-corner/SUMMARY.md
+            build/pvt-corner/liberty-inventory.tsv
+            build/pvt-corner/tooling/opensta.version.txt
+            build/pvt-corner/tooling/opensta.sha256
+          if-no-files-found: error
+          retention-days: 14
