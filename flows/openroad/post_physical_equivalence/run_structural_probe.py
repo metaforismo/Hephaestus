@@ -138,11 +138,7 @@ def run_command(
     return {
         "returncode": process.returncode,
         "timed_out": timed_out,
-        "passed": (
-            not timed_out
-            and process.returncode == 0
-            and SUCCESS_MARKER in combined
-        ),
+        "passed": (not timed_out and process.returncode == 0 and SUCCESS_MARKER in combined),
         "success_marker_found": SUCCESS_MARKER in combined,
         "stdout": stdout_path.name,
         "stdout_sha256": sha256(stdout_path),
@@ -200,11 +196,7 @@ def build_probe(
         if not isinstance(routed_meta, dict):
             raise StructuralProbeError(f"{backend} routed-Verilog metadata is missing")
 
-        attempt_root = (
-            root
-            / "downloaded-runs"
-            / f"openroad-physical-run-{backend}-1"
-        )
+        attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend}-1"
         routed = exactly_one(attempt_root, "6_final.v")
         expected_routed = routed_meta.get("sha256")
         if sha256(routed) != expected_routed:
@@ -283,9 +275,7 @@ def build_probe(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    if not evidence["claims"][
-        "all_three_exact_registered_sources_proved_against_routed_netlists"
-    ]:
+    if not evidence["claims"]["all_three_exact_registered_sources_proved_against_routed_netlists"]:
         raise StructuralProbeError("one or more structural-equivalence probes failed")
     return evidence
 
