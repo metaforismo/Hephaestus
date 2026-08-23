@@ -60,16 +60,31 @@ return it one cycle later, match the independent oracle across 272 valid vectors
 and detect the injected negative-control fault. This is simulation evidence, not sequential formal
 proof or physical timing closure.
 
-## M4 — Open-PDK RTL-to-GDS
+## M4 — Open-PDK RTL-to-GDS — physical execution implemented, sign-off chain incomplete
 
-- Consume the registered matched tile contract in a pinned IHP SG13G2 or other
-  production-accessible open-PDK backend.
-- Add clock constraints, physical I/O planning, utilization and floorplan contracts, reset handling,
-  scan/DFT planning, and eventually a pad-ring wrapper.
-- Automate matched Yosys/OpenROAD/KLayout runs for all three backends.
-- Preserve synthesis, placement, routing, congestion, STA, extraction, and switching-based power
-  reports with exact artifact provenance.
-- Add sequential, gate-level, and post-layout equivalence layers with independent negative controls.
+Implemented for the 4×6 registered regression microcase:
+
+- One immutable ORFS container digest and one common IHP SG13G2 physical contract.
+- Three registered backends, each executed in two isolated attempts.
+- Synthesis, floorplanning, placement, CTS, routing, GDS generation, and SPEF extraction.
+- Digest binding for registered sources, physical run manifests, final GDS, DEF, Verilog, OpenDB,
+  SPEF, tool banners, and selected physical metrics.
+- Repeatability checks for stable routed artifacts and an effective source-binding negative control.
+
+Still required before M4 is complete:
+
+- A permanent same-run post-physical sequential-equivalence gate. The historical research harness
+  is useful input, but its full routed-netlist bounded SAT run timed out and is not qualifying
+  evidence.
+- Independent DRC using a versioned open rule deck and an invalid-geometry negative control.
+- LVS against the exact routed/schematic pair with both layout-side and schematic-side negative
+  controls.
+- Validated post-layout extraction and activity-based power under a versioned workload.
+- Scan/DFT planning, physical I/O planning, and eventually a pad-ring wrapper.
+
+**Current claim boundary:** matched placement/routing and declared two-run physical repeatability
+are established for the exact regression case. Post-physical equivalence, comparative PPA,
+independent DRC/LVS, activity power, validated PEX, foundry sign-off, and silicon remain unverified.
 
 **Exit criterion:** reproducible DRC/LVS-clean GDS and post-layout evidence from a clean checkout.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when generated or restricted artifacts are tracked by Git."""
+"""Fail when generated, restricted, or temporary qualification files are tracked."""
 
 from __future__ import annotations
 
@@ -28,6 +28,18 @@ BLOCKED_SUFFIXES = {
     ".spef",
     ".vcd",
 }
+TEMPORARY_WORKFLOW_PREFIXES = (
+    "assemble-",
+    "finalize-",
+    "finish-",
+    "one-shot-",
+    "promote-",
+    "research-",
+)
+TEMPORARY_GITHUB_PARTS = {
+    "openroad-physical-parts",
+    "post-physical-payload",
+}
 ALLOWED_LIBERTY_METADATA = {
     PurePosixPath("configs/technology/ihp_sg13g2_stdcell_typ_1p20V_25C.json"),
 }
@@ -47,6 +59,14 @@ def violations(paths: list[PurePosixPath]) -> list[str]:
     for path in paths:
         if any(part in BLOCKED_PARTS for part in path.parts):
             failures.append(f"generated directory is tracked: {path}")
+            continue
+        if any(part in TEMPORARY_GITHUB_PARTS for part in path.parts):
+            failures.append(f"temporary qualification payload is tracked: {path}")
+            continue
+        if path.parent == PurePosixPath(".github/workflows") and path.name.startswith(
+            TEMPORARY_WORKFLOW_PREFIXES
+        ):
+            failures.append(f"temporary qualification workflow is tracked: {path}")
             continue
         suffix = path.suffix.lower()
         if suffix in BLOCKED_SUFFIXES and path not in ALLOWED_LIBERTY_METADATA:
