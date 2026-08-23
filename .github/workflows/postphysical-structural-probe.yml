@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - research/postphysical-equiv-structural-v2
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -16,6 +17,9 @@ permissions:
 
 jobs:
   exact-source-vs-routed:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.head_ref == 'research/postphysical-equiv-structural-v2'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
