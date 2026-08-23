@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,10 @@ from pathlib import Path
 from typing import Any
 
 BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
+FAULTS = ("data", "valid", "reset")
 SUCCESS_MARKER = "Equivalence successfully proven!"
+UNPROVEN_MARKER = "unproven $equiv cells"
+MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 
 class StructuralProbeError(RuntimeError):
@@ -43,6 +47,12 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def safe_module(value: Any, *, context: str) -> str:
+    if not isinstance(value, str) or MODULE_RE.fullmatch(value) is None:
+        raise StructuralProbeError(f"{context} is not a safe module name: {value!r}")
+    return value
+
+
 def exactly_one(root: Path, pattern: str) -> Path:
     matches = sorted(root.rglob(pattern))
     if len(matches) != 1:
@@ -55,44 +65,30 @@ def exactly_one(root: Path, pattern: str) -> Path:
     return path
 
 
-def emit_script(top: str, *, mode: str) -> str:
-    if mode not in {"simple", "structural", "inductive"}:
-        raise ValueError(f"unsupported proof mode: {mode}")
-    proof = {
-        "simple": ["equiv_simple", "equiv_status -assert"],
-        "structural": [
-            "equiv_struct -maxiter 20",
-            "equiv_simple",
-            "equiv_status -assert",
-        ],
-        "inductive": [
-            "equiv_struct -maxiter 20",
-            "equiv_simple",
-            "equiv_induct -seq 4",
-            "equiv_status -assert",
-        ],
-    }[mode]
+def emit_equivalence_script(*, source_top: str, gate_top: str) -> str:
+    source = safe_module(source_top, context="source top")
+    gate = safe_module(gate_top, context="gate top")
     commands = [
         "# Normalize the exact registered source.",
         "read_verilog -sv source_core.sv source_wrapper.sv",
-        f"hierarchy -check -top {top}",
+        f"hierarchy -check -top {source}",
         "proc",
         "async2sync",
         "flatten",
         "memory",
         "opt -full",
-        f"rename {top} gold",
+        f"rename {source} gold",
         "design -stash gold_design",
         "",
         "# Normalize the routed netlist with functional-only IHP cell models.",
-        "read_verilog -sv models.v routed.v",
-        f"hierarchy -check -top {top}",
+        "read_verilog -sv models.v routed.v fault_wrapper.sv",
+        f"hierarchy -check -top {gate}",
         "proc",
         "async2sync",
         "flatten",
         "memory",
         "opt -full",
-        f"rename {top} gate",
+        f"rename {gate} gate",
         "design -stash gate_design",
         "",
         "# Import both normalized tops into one equivalence design.",
@@ -102,10 +98,116 @@ def emit_script(top: str, *, mode: str) -> str:
         "hierarchy -check -top equiv",
         "proc",
         "opt -full",
-        *proof,
+        "equiv_struct -maxiter 20",
+        "equiv_simple",
+        "equiv_induct -seq 4",
+        "equiv_status -assert",
         "",
     ]
     return "\n".join(commands)
+
+
+def emit_passthrough_wrapper(
+    *,
+    routed_top: str,
+    wrapper_top: str,
+    input_bits: int,
+    output_bits: int,
+) -> str:
+    routed = safe_module(routed_top, context="routed top")
+    wrapper = safe_module(wrapper_top, context="passthrough wrapper")
+    return "\n".join(
+        [
+            f"module {wrapper} (",
+            "    input  wire clk,",
+            "    input  wire reset,",
+            "    input  wire valid_in,",
+            f"    input  wire signed [{input_bits - 1}:0] x_flat,",
+            "    output wire valid_out,",
+            f"    output wire signed [{output_bits - 1}:0] y_flat",
+            ");",
+            f"  {routed} routed (",
+            "      .clk(clk),",
+            "      .reset(reset),",
+            "      .valid_in(valid_in),",
+            "      .x_flat(x_flat),",
+            "      .valid_out(valid_out),",
+            "      .y_flat(y_flat)",
+            "  );",
+            "endmodule",
+            "",
+        ]
+    )
+
+
+def emit_fault_wrapper(
+    *,
+    routed_top: str,
+    wrapper_top: str,
+    input_bits: int,
+    output_bits: int,
+    fault: str,
+) -> str:
+    routed = safe_module(routed_top, context="routed top")
+    wrapper = safe_module(wrapper_top, context="fault wrapper")
+    if fault not in FAULTS:
+        raise ValueError(f"unsupported fault: {fault}")
+    routed_reset = "1'b0" if fault == "reset" else "reset"
+    lines = [
+        f"module {wrapper} (",
+        "    input  wire clk,",
+        "    input  wire reset,",
+        "    input  wire valid_in,",
+        f"    input  wire signed [{input_bits - 1}:0] x_flat,",
+        "    output wire valid_out,",
+        f"    output wire signed [{output_bits - 1}:0] y_flat",
+        ");",
+        "  wire routed_valid;",
+        f"  wire signed [{output_bits - 1}:0] routed_y;",
+        f"  {routed} routed (",
+        "      .clk(clk),",
+        f"      .reset({routed_reset}),",
+        "      .valid_in(valid_in),",
+        "      .x_flat(x_flat),",
+        "      .valid_out(routed_valid),",
+        "      .y_flat(routed_y)",
+        "  );",
+    ]
+    if fault == "data":
+        lines.extend(
+            [
+                f"  wire [{output_bits - 1}:0] data_fault_mask;",
+                (
+                    f"  assign data_fault_mask = {{{{{output_bits - 1}{{1'b0}}}}, "
+                    "(routed_valid & x_flat[0])};"
+                ),
+                "  assign valid_out = routed_valid;",
+                "  assign y_flat = routed_y ^ data_fault_mask;",
+            ]
+        )
+    elif fault == "valid":
+        lines.extend(
+            [
+                "  reg delayed_valid;",
+                "  always @(posedge clk) begin",
+                "    if (reset)",
+                "      delayed_valid <= 1'b0;",
+                "    else",
+                "      delayed_valid <= routed_valid;",
+                "  end",
+                "  assign valid_out = delayed_valid;",
+                "  assign y_flat = routed_y;",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "  assign valid_out = routed_valid;",
+                "  assign y_flat = routed_y;",
+            ]
+        )
+    lines.extend(["endmodule", ""])
+    return "\n".join(lines)
 
 
 def run_command(
@@ -138,8 +240,17 @@ def run_command(
     return {
         "returncode": process.returncode,
         "timed_out": timed_out,
-        "passed": (not timed_out and process.returncode == 0 and SUCCESS_MARKER in combined),
+        "positive_passed": (
+            not timed_out and process.returncode == 0 and SUCCESS_MARKER in combined
+        ),
+        "negative_control_detected": (
+            not timed_out
+            and process.returncode != 0
+            and SUCCESS_MARKER not in combined
+            and UNPROVEN_MARKER in combined
+        ),
         "success_marker_found": SUCCESS_MARKER in combined,
+        "unproven_marker_found": UNPROVEN_MARKER in combined,
         "stdout": stdout_path.name,
         "stdout_sha256": sha256(stdout_path),
         "stderr": stderr_path.name,
@@ -180,6 +291,15 @@ def build_probe(
         raise StructuralProbeError("physical backend set differs from the matched contract")
     if set(prepared.get("backends", {})) != set(BACKENDS):
         raise StructuralProbeError("prepared backend set differs from the matched contract")
+    registered_contract = registered.get("contract")
+    if not isinstance(registered_contract, dict):
+        raise StructuralProbeError("registered contract is malformed")
+    input_bits = registered_contract.get("input_bits")
+    output_bits = registered_contract.get("output_bits")
+    if type(input_bits) is not int or input_bits <= 0:
+        raise StructuralProbeError("registered input width is invalid")
+    if type(output_bits) is not int or output_bits <= 0:
+        raise StructuralProbeError("registered output width is invalid")
 
     output.mkdir(parents=True, exist_ok=True)
     results: dict[str, Any] = {}
@@ -189,18 +309,36 @@ def build_probe(
         runs = physical_backend.get("runs")
         if not isinstance(runs, list) or len(runs) != 2:
             raise StructuralProbeError(f"{backend} does not have two physical runs")
-        run = next((item for item in runs if item.get("attempt") == 1), None)
-        if not isinstance(run, dict):
-            raise StructuralProbeError(f"{backend} attempt one is missing")
-        routed_meta = run.get("artifacts", {}).get("final_verilog")
-        if not isinstance(routed_meta, dict):
-            raise StructuralProbeError(f"{backend} routed-Verilog metadata is missing")
 
-        attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend}-1"
-        routed = exactly_one(attempt_root, "6_final.v")
-        expected_routed = routed_meta.get("sha256")
-        if sha256(routed) != expected_routed:
-            raise StructuralProbeError(f"{backend} routed-Verilog digest mismatch")
+        routed_paths: dict[int, Path] = {}
+        routed_digests: dict[int, str] = {}
+        for attempt in (1, 2):
+            run = next((item for item in runs if item.get("attempt") == attempt), None)
+            if not isinstance(run, dict):
+                raise StructuralProbeError(f"{backend} attempt {attempt} is missing")
+            routed_meta = run.get("artifacts", {}).get("final_verilog")
+            if not isinstance(routed_meta, dict):
+                raise StructuralProbeError(
+                    f"{backend} attempt {attempt} routed-Verilog metadata is missing"
+                )
+            attempt_root = (
+                root
+                / "downloaded-runs"
+                / f"openroad-physical-run-{backend}-{attempt}"
+            )
+            routed = exactly_one(attempt_root, "6_final.v")
+            expected_routed = routed_meta.get("sha256")
+            actual_routed = sha256(routed)
+            if actual_routed != expected_routed:
+                raise StructuralProbeError(
+                    f"{backend} attempt {attempt} routed-Verilog digest mismatch"
+                )
+            routed_paths[attempt] = routed
+            routed_digests[attempt] = actual_routed
+        if routed_digests[1] != routed_digests[2]:
+            raise StructuralProbeError(
+                f"{backend} physical attempts do not share one routed netlist"
+            )
 
         registered_root = root / "prepared" / "registered"
         source_core = registered_root / prepared_backend["core_rtl"]
@@ -216,35 +354,89 @@ def build_probe(
         backend_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_core, backend_dir / "source_core.sv")
         shutil.copyfile(source_wrapper, backend_dir / "source_wrapper.sv")
-        shutil.copyfile(routed, backend_dir / "routed.v")
+        shutil.copyfile(routed_paths[1], backend_dir / "routed.v")
         shutil.copyfile(model_path, backend_dir / "models.v")
 
-        modes: dict[str, Any] = {}
-        for mode in ("simple", "structural", "inductive"):
-            script = backend_dir / f"{mode}.ys"
+        routed_top = prepared_backend["wrapper_module"]
+        positive_top = f"{routed_top}_positive"
+        (backend_dir / "fault_wrapper.sv").write_text(
+            emit_passthrough_wrapper(
+                routed_top=routed_top,
+                wrapper_top=positive_top,
+                input_bits=input_bits,
+                output_bits=output_bits,
+            ),
+            encoding="utf-8",
+        )
+        positive_runs: list[dict[str, Any]] = []
+        for attempt in (1, 2):
+            script = backend_dir / f"positive-{attempt}.ys"
             script.write_text(
-                emit_script(prepared_backend["wrapper_module"], mode=mode),
+                emit_equivalence_script(
+                    source_top=routed_top,
+                    gate_top=positive_top,
+                ),
                 encoding="utf-8",
             )
-            modes[mode] = run_command(
+            result = run_command(
                 resolved_yosys,
                 backend_dir,
                 script,
                 timeout=timeout,
             )
-            if modes[mode]["passed"]:
+            positive_runs.append(result)
+            if not result["positive_passed"]:
                 break
 
+        controls: dict[str, Any] = {}
+        if all(result["positive_passed"] for result in positive_runs):
+            for fault in FAULTS:
+                fault_top = f"{routed_top}_fault_{fault}"
+                (backend_dir / "fault_wrapper.sv").write_text(
+                    emit_fault_wrapper(
+                        routed_top=routed_top,
+                        wrapper_top=fault_top,
+                        input_bits=input_bits,
+                        output_bits=output_bits,
+                        fault=fault,
+                    ),
+                    encoding="utf-8",
+                )
+                script = backend_dir / f"negative-{fault}.ys"
+                script.write_text(
+                    emit_equivalence_script(
+                        source_top=routed_top,
+                        gate_top=fault_top,
+                    ),
+                    encoding="utf-8",
+                )
+                controls[fault] = run_command(
+                    resolved_yosys,
+                    backend_dir,
+                    script,
+                    timeout=timeout,
+                )
+
+        positive_passed = len(positive_runs) == 2 and all(
+            result["positive_passed"] for result in positive_runs
+        )
+        controls_passed = set(controls) == set(FAULTS) and all(
+            result["negative_control_detected"] for result in controls.values()
+        )
         results[backend] = {
             "source_core_sha256": sha256(source_core),
             "source_wrapper_sha256": sha256(source_wrapper),
-            "routed_verilog_sha256": sha256(routed),
-            "modes": modes,
-            "passed": any(result["passed"] for result in modes.values()),
+            "routed_verilog_sha256": routed_digests[1],
+            "both_physical_attempts_share_routed_verilog": True,
+            "positive_runs": positive_runs,
+            "negative_controls": controls,
+            "positive_passed": positive_passed,
+            "negative_controls_passed": controls_passed,
+            "passed": positive_passed and controls_passed,
         }
 
     evidence = {
-        "schema": "hephaestus.post-physical-structural-probe.v1",
+        "schema": "hephaestus.post-physical-structural-probe.v2",
         "research_only": True,
         "source": {
             "physical_evidence_sha256": sha256(physical_path),
@@ -255,10 +447,19 @@ def build_probe(
         "tool": {
             "yosys": resolved_yosys,
         },
+        "proof_contract": {
+            "method": "equiv_make + equiv_struct + equiv_simple + equiv_induct",
+            "induction_sequence_length": 4,
+            "positive_attempts_per_backend": 2,
+            "negative_controls": list(FAULTS),
+        },
         "backends": results,
         "claims": {
             "all_three_exact_registered_sources_proved_against_routed_netlists": all(
-                value["passed"] for value in results.values()
+                value["positive_passed"] for value in results.values()
+            ),
+            "all_data_valid_reset_negative_controls_detected": all(
+                value["negative_controls_passed"] for value in results.values()
             ),
             "post_physical_equivalence_verified": False,
             "comparative_ppa_claim_enabled": False,
@@ -275,7 +476,7 @@ def build_probe(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    if not evidence["claims"]["all_three_exact_registered_sources_proved_against_routed_netlists"]:
+    if not all(value["passed"] for value in results.values()):
         raise StructuralProbeError("one or more structural-equivalence probes failed")
     return evidence
 
@@ -305,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(
         "structural probe completed: "
-        f"{evidence['claims']['all_three_exact_registered_sources_proved_against_routed_netlists']}"
+        f"{all(value['passed'] for value in evidence['backends'].values())}"
     )
     return 0
 
