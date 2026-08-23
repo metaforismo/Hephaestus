@@ -11,12 +11,15 @@ SPEC.loader.exec_module(hygiene)
 
 
 def test_permanent_workflows_are_allowed() -> None:
-    assert hygiene.violations(
-        [
-            PurePosixPath(".github/workflows/ci.yml"),
-            PurePosixPath(".github/workflows/openroad-physical-evidence.yml"),
-        ]
-    ) == []
+    assert (
+        hygiene.violations(
+            [
+                PurePosixPath(".github/workflows/ci.yml"),
+                PurePosixPath(".github/workflows/openroad-physical-evidence.yml"),
+            ]
+        )
+        == []
+    )
 
 
 def test_temporary_workflow_prefixes_are_rejected() -> None:
@@ -29,12 +32,9 @@ def test_temporary_workflow_prefixes_are_rejected() -> None:
     )
 
     assert failures == [
-        "temporary qualification workflow is tracked: "
-        ".github/workflows/one-shot-cleanup.yml",
-        "temporary qualification workflow is tracked: "
-        ".github/workflows/promote-reference.yml",
-        "temporary qualification workflow is tracked: "
-        ".github/workflows/research-probe.yml",
+        "temporary qualification workflow is tracked: .github/workflows/one-shot-cleanup.yml",
+        "temporary qualification workflow is tracked: .github/workflows/promote-reference.yml",
+        "temporary qualification workflow is tracked: .github/workflows/research-probe.yml",
     ]
 
 
@@ -47,10 +47,8 @@ def test_temporary_payload_directories_are_rejected() -> None:
     )
 
     assert failures == [
-        "temporary qualification payload is tracked: "
-        ".github/openroad-physical-parts/module.part",
-        "temporary qualification payload is tracked: "
-        ".github/post-physical-payload/payload.b64",
+        "temporary qualification payload is tracked: .github/openroad-physical-parts/module.part",
+        "temporary qualification payload is tracked: .github/post-physical-payload/payload.b64",
     ]
 
 
