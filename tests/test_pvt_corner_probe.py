@@ -8,13 +8,7 @@ from pathlib import Path
 
 import pytest
 
-MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "flows"
-    / "openroad"
-    / "pvt_corner"
-    / "run_probe.py"
-)
+MODULE_PATH = Path(__file__).parents[1] / "flows" / "openroad" / "pvt_corner" / "run_probe.py"
 SPEC = importlib.util.spec_from_file_location("pvt_corner_probe", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 probe = importlib.util.module_from_spec(SPEC)

@@ -87,9 +87,7 @@ def require_module(value: Any, *, context: str) -> str:
 def exactly_one(root: Path, name: str) -> Path:
     matches = sorted(root.rglob(name))
     if len(matches) != 1:
-        raise PVTProbeError(
-            f"expected exactly one {name!r} below {root}, found {len(matches)}"
-        )
+        raise PVTProbeError(f"expected exactly one {name!r} below {root}, found {len(matches)}")
     path = matches[0]
     if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
         raise PVTProbeError(f"invalid required artifact: {path}")
@@ -140,9 +138,7 @@ def resolve_by_digest(
     if isinstance(raw_path, str) and raw_path:
         basename = Path(raw_path).name
         candidates.extend(
-            path
-            for path in search_root.rglob(basename)
-            if path.is_file() and not path.is_symlink()
+            path for path in search_root.rglob(basename) if path.is_file() and not path.is_symlink()
         )
     unique: dict[Path, str] = {}
     for candidate in candidates:
@@ -151,9 +147,7 @@ def resolve_by_digest(
             unique[resolved] = sha256_file(resolved)
     matches = [path for path, actual in unique.items() if actual == digest]
     if len(matches) != 1:
-        raise PVTProbeError(
-            f"{context} expected one digest match, found {len(matches)}"
-        )
+        raise PVTProbeError(f"{context} expected one digest match, found {len(matches)}")
     return matches[0]
 
 
@@ -188,9 +182,7 @@ def validate_physical_evidence(
     if prepared.get("schema") != "hephaestus.openroad-physical-prepared.v1":
         raise PVTProbeError("unsupported prepared physical-evidence schema")
     prepared_backends = prepared.get("backends")
-    if not isinstance(prepared_backends, dict) or set(prepared_backends) != set(
-        BACKENDS
-    ):
+    if not isinstance(prepared_backends, dict) or set(prepared_backends) != set(BACKENDS):
         raise PVTProbeError("prepared evidence does not cover the three backends")
     source = evidence.get("source")
     if not isinstance(source, dict):
@@ -244,9 +236,7 @@ def liberty_score(path: Path, label: str) -> int:
 
 def discover_liberty_corners(pdk_root: Path) -> dict[str, Path]:
     candidates = sorted(
-        path
-        for path in pdk_root.rglob("*.lib")
-        if path.is_file() and not path.is_symlink()
+        path for path in pdk_root.rglob("*.lib") if path.is_file() and not path.is_symlink()
     )
     if not candidates:
         raise PVTProbeError(f"no Liberty files found below {pdk_root}")
@@ -396,8 +386,7 @@ def run_opensta(
     stderr_path.write_text(completed.stderr, encoding="utf-8")
     if completed.returncode != 0:
         raise PVTProbeError(
-            f"OpenSTA attempt {attempt} failed with return code "
-            f"{completed.returncode}"
+            f"OpenSTA attempt {attempt} failed with return code {completed.returncode}"
         )
     metrics = parse_opensta_metrics(completed.stdout)
     return {
@@ -536,9 +525,7 @@ def build_probe(
                 attempts[1]["metrics"],
             )
             if not repeatable:
-                raise PVTProbeError(
-                    f"OpenSTA metrics are not repeatable for {backend}/{label}"
-                )
+                raise PVTProbeError(f"OpenSTA metrics are not repeatable for {backend}/{label}")
             backend_corners[label] = {
                 "liberty": liberty[label].relative_to(pdk_root).as_posix(),
                 "liberty_sha256": sha256_file(liberty[label]),
