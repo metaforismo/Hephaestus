@@ -51,11 +51,7 @@ def tracked_files() -> list[PurePosixPath]:
         check=True,
         capture_output=True,
     )
-    return [
-        PurePosixPath(raw.decode("utf-8"))
-        for raw in completed.stdout.split(b"\0")
-        if raw
-    ]
+    return [PurePosixPath(raw.decode("utf-8")) for raw in completed.stdout.split(b"\0") if raw]
 
 
 def violations(paths: list[PurePosixPath]) -> list[str]:
@@ -67,9 +63,8 @@ def violations(paths: list[PurePosixPath]) -> list[str]:
         if any(part in TEMPORARY_GITHUB_PARTS for part in path.parts):
             failures.append(f"temporary qualification payload is tracked: {path}")
             continue
-        if (
-            path.parent == PurePosixPath(".github/workflows")
-            and path.name.startswith(TEMPORARY_WORKFLOW_PREFIXES)
+        if path.parent == PurePosixPath(".github/workflows") and path.name.startswith(
+            TEMPORARY_WORKFLOW_PREFIXES
         ):
             failures.append(f"temporary qualification workflow is tracked: {path}")
             continue
