@@ -26,9 +26,7 @@ def _validate_source_chain(root: Path) -> dict[str, Any]:
 
     if physical.get("schema") != "hephaestus.openroad-physical-evidence.v1":
         raise PostPhysicalEquivalenceError("unsupported physical evidence schema")
-    if physical.get("evidence_level") != (
-        "matched_registered_orfs_rtl_to_gds_repeatability"
-    ):
+    if physical.get("evidence_level") != ("matched_registered_orfs_rtl_to_gds_repeatability"):
         raise PostPhysicalEquivalenceError("unexpected physical evidence level")
     if prepared.get("schema") != "hephaestus.openroad-physical-prepared.v1":
         raise PostPhysicalEquivalenceError("unsupported prepared evidence schema")

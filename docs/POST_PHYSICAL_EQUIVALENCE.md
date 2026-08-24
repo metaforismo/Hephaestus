@@ -12,7 +12,8 @@ independent arithmetic reference
   → registered source contract
   → exact registered source RTL
   → two routed physical attempts per backend
-  → compositional sequential equivalence
+  → reset-synchronized bounded base case
+  → steady-state temporal induction
 ```
 
 The routed proof does not reintroduce the full arithmetic miter. That upstream contract is already
@@ -51,12 +52,32 @@ Before invoking Yosys, the builder independently verifies:
 - the functional IHP cell-model digest and the pinned regression reference.
 
 Every proof directory preserves the exact source core, source wrapper, routed netlist, functional
-cell models, generated wrapper, Yosys script, stdout, stderr, and their digests.
+cell models, generated wrapper, Yosys scripts, stdout, stderr, and their digests.
 
-## Proof method
+## Why the proof has two obligations
 
-For each of three backends and each of two physical attempts, Yosys normalizes the exact registered
-source and routed implementation independently, then runs:
+Yosys documents `equiv_induct` as a weak temporal-induction relation: it establishes that two
+circuits cannot diverge after their observable equivalence points have already remained equal for
+the selected sequence length. It is therefore not used alone.
+
+For every routed attempt, the permanent gate requires both:
+
+1. a bounded reset-synchronized base case that establishes four consecutive equal observable
+   cycles after reset; and
+2. a steady-state induction proof with `equiv_induct -seq 4`.
+
+The base case is generated directly from the `equiv_make` result with `equiv_miter -assert`, then
+checked over five symbolic cycles:
+
+```text
+cycle 1: reset asserted
+cycles 2–5: reset released
+assertions checked on cycles 2–5
+initial state: arbitrary but defined
+inputs: arbitrary but defined
+```
+
+The steady-state obligation independently runs:
 
 ```text
 equiv_make
@@ -66,10 +87,21 @@ equiv_induct -seq 4
 equiv_status -assert
 ```
 
-A positive result is accepted only when the final `equiv_status` reports a nonzero number of cells,
-all cells proven, zero unproven cells, a zero exit status, no timeout, and the final success marker.
-Intermediate `equiv_simple` failures are not treated as proof failure when `equiv_induct` later
-proves the complete workset.
+A positive result is accepted only when the bounded SAT proof reaches the SAT pass with a nonzero
+set of equivalence points and finds no counterexample, while the final induction status reports a
+nonzero number of cells, all cells proven, zero unproven cells, a zero exit status, no timeout, and
+the final success marker.
+
+## Reset semantics
+
+The registered source contract uses synchronous active-high reset. The routed IHP implementation
+contains technology flip-flops with asynchronous reset pins. Both sides are normalized with Yosys
+`async2sync` before the two proof obligations.
+
+The qualified statement is therefore limited to the declared **clock-edge transaction behavior
+after the explicit reset sequence**. It does not claim equivalence for arbitrary asynchronous reset
+transitions between clock edges, analog reset behavior, metastability, or arbitrary unreset power-up
+recovery.
 
 ## Negative controls
 
@@ -79,9 +111,14 @@ One independent control of each class is required for every backend:
 - **valid latency:** insert an additional valid register;
 - **reset state:** disconnect the routed implementation from the declared reset.
 
-A negative control passes only when Yosys reaches `equiv_status -assert`, exits nonzero, reports one
-or more unproven equivalence cells, does not emit the success marker, and does not time out. Syntax,
-tool, or missing-input errors are therefore not accepted as counterexamples.
+Each control must fail both obligations in the expected way:
+
+- the bounded reset miter must reach SAT and produce a real counterexample;
+- the induction flow must reach `equiv_status -assert` and leave one or more equivalence cells
+  unproven.
+
+Syntax errors, missing inputs, timeouts, tool crashes, empty equivalence sets, and generic nonzero
+exit codes are not accepted as negative-control success.
 
 ## Regression policy
 
@@ -90,9 +127,9 @@ The reference pins only stable invariants:
 - exact source-core, source-wrapper, routed-netlist, functional-model, generated-wrapper, and proof
   script digests;
 - the pinned Yosys version;
-- proof method and sequence length;
-- proved/unproven cell counts;
-- expected negative-control unproven counts;
+- bounded-reset sequence, proof method, and induction sequence length;
+- proved/unproven induction cell counts;
+- expected negative-control counterexample and unproven-cell observations;
 - the explicit claim boundary.
 
 It does not pin raw runtime, CPU time, memory use, log hashes, GitHub run IDs, or other execution
@@ -101,15 +138,16 @@ and workflow provenance.
 
 ## Claim boundary
 
-A qualifying exact-head run enables these statements for the registered 4×6 IHP SG13G2 regression
-microcase:
+Only a qualifying exact-head run enables these statements for the registered 4×6 IHP SG13G2
+regression microcase:
 
 ```text
 post_physical_equivalence_verified = true
 comparative_ppa_claim_enabled = true
 ```
 
-The comparison remains limited to the declared two-state, zero-delay functional semantics and the
-common physical boundary. It does not establish four-state behavior, timing-annotated behavior,
-independent DRC, LVS, validated PEX, activity-based power, foundry sign-off, universal architectural
-superiority, or silicon behavior.
+The comparison remains limited to the declared two-state, zero-delay, clock-edge functional
+semantics and the common physical boundary. It does not establish four-state behavior,
+timing-annotated behavior, arbitrary asynchronous-reset-event equivalence, independent DRC, LVS,
+validated PEX, activity-based power, foundry sign-off, universal architectural superiority, or
+silicon behavior.

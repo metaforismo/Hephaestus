@@ -16,10 +16,15 @@ _REFERENCE_SCHEMA = "hephaestus.post-physical-equivalence-reference.v1"
 _REFERENCE_ID = "ihp-sg13g2-post-physical-equivalence-tiny-v1"
 _EVIDENCE_LEVEL = "exact_registered_source_to_routed_sequential_equivalence"
 _EQUIV_SEQUENCE_LENGTH = 4
+_BASE_CASE_CYCLES = 5
+_BASE_CASE_PROVE_SKIP = 1
+_RESET_SEQUENCE = (1, 0, 0, 0, 0)
 _MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _SUCCESS_MARKER = "Equivalence successfully proven!"
+_SAT_SUCCESS_MARKER = "SAT proof finished - no model found: SUCCESS!"
+_SAT_FAILURE_MARKER = "SAT proof finished - model found: FAIL!"
 _STATUS_RE = re.compile(
     r"Found (?P<total>\d+) \$equiv cells in equiv:\s*"
     r"Of those cells (?P<proven>\d+) are proven and "

@@ -7,10 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from ._common import (
+    _BASE_CASE_CYCLES,
+    _BASE_CASE_PROVE_SKIP,
     _EQUIV_SEQUENCE_LENGTH,
     _FAULTS,
     _INDUCTION_STEP_RE,
     _NEGATIVE_STATUS_RE,
+    _RESET_SEQUENCE,
+    _SAT_FAILURE_MARKER,
+    _SAT_SUCCESS_MARKER,
     _STATUS_RE,
     _SUCCESS_MARKER,
     _YOSYS_VERSION_RE,
@@ -122,42 +127,100 @@ def emit_fault_wrapper(
     return "\n".join(lines)
 
 
-def emit_equivalence_script(*, source_top: str, gate_top: str) -> str:
-    """Normalize two exact sequential implementations and prove equivalence."""
-
+def _normalized_design_commands(*, source_top: str, gate_top: str) -> list[str]:
     source = _safe_module(source_top, context="source top")
     gate = _safe_module(gate_top, context="gate top")
+    return [
+        "# Normalize the exact registered source implementation.",
+        "read_verilog -sv source_core.sv source_wrapper.sv",
+        f"hierarchy -check -top {source}",
+        "proc",
+        "async2sync",
+        "flatten",
+        "memory",
+        "opt -full",
+        f"rename {source} gold",
+        "design -stash gold_design",
+        "",
+        "# Normalize the exact routed netlist with functional-only cell models.",
+        "read_verilog -sv models.v routed.v gate_wrapper.sv",
+        f"hierarchy -check -top {gate}",
+        "proc",
+        "async2sync",
+        "flatten",
+        "memory",
+        "opt -full",
+        f"rename {gate} gate",
+        "design -stash gate_design",
+        "",
+        "# Import both normalized implementations into one equivalence design.",
+        "design -copy-from gold_design gold",
+        "design -copy-from gate_design gate",
+        "equiv_make gold gate equiv",
+        "hierarchy -check -top equiv",
+        "proc",
+        "opt -full",
+    ]
+
+
+def emit_bounded_reset_script(
+    *,
+    source_top: str,
+    gate_top: str,
+    expect_counterexample: bool,
+) -> str:
+    """Prove or falsify the reset-synchronized base case for induction."""
+
+    sat = [
+        "sat",
+        f"-seq {_BASE_CASE_CYCLES}",
+        "-set-def-inputs",
+        "-set-init-def",
+        f"-prove-skip {_BASE_CASE_PROVE_SKIP}",
+        "-prove-asserts",
+        "-show-inputs",
+        "-show-outputs",
+    ]
+    if not expect_counterexample:
+        sat.insert(1, "-verify")
+    sat.extend(
+        f"-set-at {step} reset {value}"
+        for step, value in enumerate(_RESET_SEQUENCE, start=1)
+    )
     return "\n".join(
         [
-            "# Normalize the exact registered source implementation.",
-            "read_verilog -sv source_core.sv source_wrapper.sv",
-            f"hierarchy -check -top {source}",
+            *_normalized_design_commands(
+                source_top=source_top,
+                gate_top=gate_top,
+            ),
+            "# Preserve every nontrivial output comparison as an assertion miter.",
+            "equiv_status",
+            "select -clear",
+            "select equiv",
+            "equiv_miter -assert reset_miter",
+            "hierarchy -check -top reset_miter",
             "proc",
-            "async2sync",
             "flatten",
-            "memory",
             "opt -full",
-            f"rename {source} gold",
-            "design -stash gold_design",
+            "check",
+            "select -clear",
+            "select reset_miter",
+            " ".join(sat),
             "",
-            "# Normalize the exact routed netlist with functional-only cell models.",
-            "read_verilog -sv models.v routed.v gate_wrapper.sv",
-            f"hierarchy -check -top {gate}",
-            "proc",
-            "async2sync",
-            "flatten",
-            "memory",
-            "opt -full",
-            f"rename {gate} gate",
-            "design -stash gate_design",
-            "",
-            "# Compare the two normalized sequential implementations.",
-            "design -copy-from gold_design gold",
-            "design -copy-from gate_design gate",
-            "equiv_make gold gate equiv",
-            "hierarchy -check -top equiv",
-            "proc",
-            "opt -full",
+        ]
+    )
+
+
+def emit_equivalence_script(*, source_top: str, gate_top: str) -> str:
+    """Prove the steady-state obligation after a separate bounded base case."""
+
+    return "\n".join(
+        [
+            *_normalized_design_commands(
+                source_top=source_top,
+                gate_top=gate_top,
+            ),
+            "# Close the steady-state obligation with temporal induction.",
             "equiv_struct -maxiter 20",
             "equiv_simple",
             f"equiv_induct -seq {_EQUIV_SEQUENCE_LENGTH}",
@@ -167,14 +230,13 @@ def emit_equivalence_script(*, source_top: str, gate_top: str) -> str:
     )
 
 
-def _run_yosys(
+def _run_process(
     executable: str,
     workdir: Path,
     script: Path,
     *,
     timeout: int,
-    expect_equivalent: bool,
-) -> dict[str, Any]:
+) -> tuple[subprocess.Popen[str], bool, str, str]:
     process = subprocess.Popen(
         [executable, "-s", script.name],
         cwd=workdir,
@@ -189,15 +251,103 @@ def _run_yosys(
         timed_out = True
         process.kill()
         stdout, stderr = process.communicate()
+    return process, timed_out, stdout, stderr
 
+
+def _write_logs(
+    workdir: Path,
+    script: Path,
+    stdout: str,
+    stderr: str,
+) -> tuple[Path, Path]:
     stdout_path = workdir / f"{script.stem}.stdout.txt"
     stderr_path = workdir / f"{script.stem}.stderr.txt"
     stdout_path.write_text(stdout, encoding="utf-8")
     stderr_path.write_text(stderr, encoding="utf-8")
+    return stdout_path, stderr_path
+
+
+def _run_bounded_yosys(
+    executable: str,
+    workdir: Path,
+    script: Path,
+    *,
+    timeout: int,
+    expect_counterexample: bool,
+) -> dict[str, Any]:
+    process, timed_out, stdout, stderr = _run_process(
+        executable,
+        workdir,
+        script,
+        timeout=timeout,
+    )
+    stdout_path, stderr_path = _write_logs(workdir, script, stdout, stderr)
     combined = stdout + "\n" + stderr
     status_matches = list(_STATUS_RE.finditer(stdout))
     final_status = status_matches[-1] if status_matches else None
-    induction_steps = [int(match.group("step")) for match in _INDUCTION_STEP_RE.finditer(stdout)]
+    total = int(final_status.group("total")) if final_status else None
+    sat_started = "Executing SAT pass." in stdout
+    proof_success = _SAT_SUCCESS_MARKER in combined
+    counterexample = _SAT_FAILURE_MARKER in combined
+    nonvacuous = total is not None and total > 0
+    if expect_counterexample:
+        passed = (
+            not timed_out
+            and process.returncode == 0
+            and sat_started
+            and nonvacuous
+            and counterexample
+            and not proof_success
+        )
+    else:
+        passed = (
+            not timed_out
+            and process.returncode == 0
+            and sat_started
+            and nonvacuous
+            and proof_success
+            and not counterexample
+        )
+    return {
+        "passed": passed,
+        "expected_counterexample": expect_counterexample,
+        "returncode": process.returncode,
+        "timed_out": timed_out,
+        "sat_pass_started": sat_started,
+        "equiv_cells_total": total,
+        "proof_success": proof_success,
+        "counterexample_found": counterexample,
+        "cycles": _BASE_CASE_CYCLES,
+        "prove_skip": _BASE_CASE_PROVE_SKIP,
+        "reset_sequence": list(_RESET_SEQUENCE),
+        "stdout": stdout_path.name,
+        "stdout_sha256": _sha256(stdout_path),
+        "stderr": stderr_path.name,
+        "stderr_sha256": _sha256(stderr_path),
+    }
+
+
+def _run_yosys(
+    executable: str,
+    workdir: Path,
+    script: Path,
+    *,
+    timeout: int,
+    expect_equivalent: bool,
+) -> dict[str, Any]:
+    process, timed_out, stdout, stderr = _run_process(
+        executable,
+        workdir,
+        script,
+        timeout=timeout,
+    )
+    stdout_path, stderr_path = _write_logs(workdir, script, stdout, stderr)
+    combined = stdout + "\n" + stderr
+    status_matches = list(_STATUS_RE.finditer(stdout))
+    final_status = status_matches[-1] if status_matches else None
+    induction_steps = [
+        int(match.group("step")) for match in _INDUCTION_STEP_RE.finditer(stdout)
+    ]
     negative_match = _NEGATIVE_STATUS_RE.search(stderr)
 
     total = int(final_status.group("total")) if final_status else None

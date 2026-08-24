@@ -8,9 +8,12 @@ from typing import Any
 
 from ._common import (
     _BACKENDS,
+    _BASE_CASE_CYCLES,
+    _BASE_CASE_PROVE_SKIP,
     _EQUIV_SEQUENCE_LENGTH,
     _EVIDENCE_LEVEL,
     _FAULTS,
+    _RESET_SEQUENCE,
     _SCHEMA,
     PostPhysicalEquivalenceError,
     _copy_bound,
@@ -24,7 +27,9 @@ from ._common import (
 )
 from ._proof import (
     _capture_yosys_version,
+    _run_bounded_yosys,
     _run_yosys,
+    emit_bounded_reset_script,
     emit_equivalence_script,
     emit_fault_wrapper,
     emit_passthrough_wrapper,
@@ -104,13 +109,27 @@ def build_evidence(
         },
         "toolchain": toolchain,
         "proof_contract": {
-            "method": ["equiv_make", "equiv_struct", "equiv_simple", "equiv_induct"],
+            "method": [
+                "equiv_make",
+                "equiv_miter",
+                "bounded_sat_reset_base_case",
+                "equiv_struct",
+                "equiv_simple",
+                "equiv_induct",
+            ],
+            "bounded_reset_cycles": _BASE_CASE_CYCLES,
+            "bounded_reset_prove_skip": _BASE_CASE_PROVE_SKIP,
+            "bounded_reset_sequence": list(_RESET_SEQUENCE),
             "equiv_induct_sequence_length": _EQUIV_SEQUENCE_LENGTH,
             "attempts_per_backend": 2,
-            "positive_proofs_per_backend": 2,
+            "positive_base_cases_per_backend": 2,
+            "positive_induction_proofs_per_backend": 2,
             "negative_controls": list(_FAULTS),
-            "semantics": "two-state functional sequential equivalence",
-            "reset_model": "synchronous active-high source and routed reset",
+            "semantics": "two-state zero-delay clock-edge functional sequential equivalence",
+            "reset_model": (
+                "source synchronous active-high reset; routed reset normalized with async2sync; "
+                "arbitrary asynchronous between-edge reset events are excluded"
+            ),
         },
         "backends": {},
     }
@@ -196,11 +215,7 @@ def build_evidence(
                 manifest_digest,
                 context=f"{backend} attempt {attempt} bound manifest",
             )
-            attempt_root = (
-                root
-                / "downloaded-runs"
-                / f"openroad-physical-run-{backend}-{attempt}"
-            )
+            attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
             original_manifest = _verify_file(
                 attempt_root,
                 "openroad_run.json",
@@ -296,46 +311,74 @@ def build_evidence(
                 context=f"{backend} attempt {attempt} run manifest",
             )
             gate_top = f"{source_top}_routed_attempt_{attempt}"
-            wrapper_text = emit_passthrough_wrapper(
-                routed_top=source_top,
-                wrapper_top=gate_top,
-                input_bits=input_bits,
-                output_bits=output_bits,
-            )
             wrapper_path = attempt_dir / "gate_wrapper.sv"
-            wrapper_path.write_text(wrapper_text, encoding="utf-8")
-            script_text = emit_equivalence_script(
-                source_top=source_top,
-                gate_top=gate_top,
+            wrapper_path.write_text(
+                emit_passthrough_wrapper(
+                    routed_top=source_top,
+                    wrapper_top=gate_top,
+                    input_bits=input_bits,
+                    output_bits=output_bits,
+                ),
+                encoding="utf-8",
             )
-            script_path = attempt_dir / "positive.ys"
-            script_path.write_text(script_text, encoding="utf-8")
             for name in ("source_core.sv", "source_wrapper.sv", "models.v"):
                 shutil.copyfile(backend_dir / name, attempt_dir / name)
-            result = _run_yosys(
+
+            base_script = attempt_dir / "bounded-reset.ys"
+            base_script.write_text(
+                emit_bounded_reset_script(
+                    source_top=source_top,
+                    gate_top=gate_top,
+                    expect_counterexample=False,
+                ),
+                encoding="utf-8",
+            )
+            base_result = _run_bounded_yosys(
                 resolved_yosys,
                 attempt_dir,
-                script_path,
+                base_script,
+                timeout=timeout,
+                expect_counterexample=False,
+            )
+            if not base_result["passed"]:
+                raise PostPhysicalEquivalenceError(
+                    f"{backend} attempt {attempt} reset base case did not prove"
+                )
+
+            induction_script = attempt_dir / "positive.ys"
+            induction_script.write_text(
+                emit_equivalence_script(
+                    source_top=source_top,
+                    gate_top=gate_top,
+                ),
+                encoding="utf-8",
+            )
+            induction_result = _run_yosys(
+                resolved_yosys,
+                attempt_dir,
+                induction_script,
                 timeout=timeout,
                 expect_equivalent=True,
             )
-            if not result["passed"]:
+            if not induction_result["passed"]:
                 raise PostPhysicalEquivalenceError(
-                    f"{backend} attempt {attempt} routed equivalence did not prove"
+                    f"{backend} attempt {attempt} steady-state induction did not prove"
                 )
             attempts.append(
                 {
                     "attempt": attempt,
-                    "physical_run_manifest": {
-                        "sha256": manifest_digest,
+                    "physical_run_manifest": {"sha256": manifest_digest},
+                    "routed_verilog": {"sha256": routed_digest},
+                    "gate_wrapper_sha256": _sha256(wrapper_path),
+                    "reset_synchronized_base_case": {
+                        "script": base_script.name,
+                        "script_sha256": _sha256(base_script),
+                        **base_result,
                     },
-                    "routed_verilog": {
-                        "sha256": routed_digest,
-                    },
-                    "proof": {
-                        "script": script_path.name,
-                        "script_sha256": _sha256(script_path),
-                        **result,
+                    "steady_state_induction": {
+                        "script": induction_script.name,
+                        "script_sha256": _sha256(induction_script),
+                        **induction_result,
                     },
                 }
             )
@@ -359,36 +402,69 @@ def build_evidence(
                 context=f"{backend} negative-control routed Verilog",
             )
             gate_top = f"{source_top}_negative_{fault}"
-            wrapper_text = emit_fault_wrapper(
-                routed_top=source_top,
-                wrapper_top=gate_top,
-                input_bits=input_bits,
-                output_bits=output_bits,
-                fault=fault,
-            )
             wrapper_path = control_dir / "gate_wrapper.sv"
-            wrapper_path.write_text(wrapper_text, encoding="utf-8")
-            script_path = control_dir / "negative.ys"
-            script_path.write_text(
-                emit_equivalence_script(source_top=source_top, gate_top=gate_top),
+            wrapper_path.write_text(
+                emit_fault_wrapper(
+                    routed_top=source_top,
+                    wrapper_top=gate_top,
+                    input_bits=input_bits,
+                    output_bits=output_bits,
+                    fault=fault,
+                ),
                 encoding="utf-8",
             )
-            result = _run_yosys(
+
+            base_script = control_dir / "bounded-reset.ys"
+            base_script.write_text(
+                emit_bounded_reset_script(
+                    source_top=source_top,
+                    gate_top=gate_top,
+                    expect_counterexample=True,
+                ),
+                encoding="utf-8",
+            )
+            base_result = _run_bounded_yosys(
                 resolved_yosys,
                 control_dir,
-                script_path,
+                base_script,
+                timeout=timeout,
+                expect_counterexample=True,
+            )
+            if not base_result["passed"]:
+                raise PostPhysicalEquivalenceError(
+                    f"{backend} {fault} base-case control did not produce a counterexample"
+                )
+
+            induction_script = control_dir / "negative.ys"
+            induction_script.write_text(
+                emit_equivalence_script(
+                    source_top=source_top,
+                    gate_top=gate_top,
+                ),
+                encoding="utf-8",
+            )
+            induction_result = _run_yosys(
+                resolved_yosys,
+                control_dir,
+                induction_script,
                 timeout=timeout,
                 expect_equivalent=False,
             )
-            if not result["passed"]:
+            if not induction_result["passed"]:
                 raise PostPhysicalEquivalenceError(
-                    f"{backend} {fault} negative control was not detected"
+                    f"{backend} {fault} induction control was not detected"
                 )
             controls[fault] = {
                 "wrapper_sha256": _sha256(wrapper_path),
-                "script_sha256": _sha256(script_path),
                 "routed_verilog_sha256": routed_digests[0],
-                "result": result,
+                "reset_synchronized_base_case": {
+                    "script_sha256": _sha256(base_script),
+                    **base_result,
+                },
+                "steady_state_induction": {
+                    "script_sha256": _sha256(induction_script),
+                    **induction_result,
+                },
             }
 
         evidence["backends"][backend] = {
@@ -428,10 +504,12 @@ def build_evidence(
         f"- source revision: `{evidence['execution']['source_revision']}`",
         "- backends: `3`",
         "- physical attempts bound: `6`",
-        "- positive sequential proofs: `6`",
-        "- negative controls: `9`",
+        "- reset-synchronized bounded base cases: `6`",
+        "- steady-state induction proofs: `6`",
+        "- negative controls checked by both obligations: `9`",
         "- post-physical equivalence verified: `true`",
         "- comparative microcase PPA claim enabled: `true`",
+        "- arbitrary asynchronous reset events: `not claimed`",
         "- four-state or timing-annotated semantics: `false`",
         "- DRC / LVS / PEX / power / sign-off / silicon: `false`",
         "",

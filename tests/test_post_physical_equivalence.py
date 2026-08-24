@@ -20,6 +20,10 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -111,13 +115,27 @@ def _qualified_claims() -> dict[str, bool]:
 
 def _proof_contract() -> dict[str, object]:
     return {
-        "method": ["equiv_make", "equiv_struct", "equiv_simple", "equiv_induct"],
+        "method": [
+            "equiv_make",
+            "equiv_miter",
+            "bounded_sat_reset_base_case",
+            "equiv_struct",
+            "equiv_simple",
+            "equiv_induct",
+        ],
+        "bounded_reset_cycles": 5,
+        "bounded_reset_prove_skip": 1,
+        "bounded_reset_sequence": [1, 0, 0, 0, 0],
         "equiv_induct_sequence_length": 4,
         "attempts_per_backend": 2,
-        "positive_proofs_per_backend": 2,
+        "positive_base_cases_per_backend": 2,
+        "positive_induction_proofs_per_backend": 2,
         "negative_controls": ["data", "valid", "reset"],
-        "semantics": "two-state functional sequential equivalence",
-        "reset_model": "synchronous active-high source and routed reset",
+        "semantics": "two-state zero-delay clock-edge functional sequential equivalence",
+        "reset_model": (
+            "source synchronous active-high reset; routed reset normalized with async2sync; "
+            "arbitrary asynchronous between-edge reset events are excluded"
+        ),
     }
 
 
@@ -126,7 +144,10 @@ def _make_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
     registered_root = root / "prepared" / "registered"
     registered_root.mkdir(parents=True)
     models = tmp_path / "models.v"
-    models.write_text("module sg13g2_buf_1(input A, output X); assign X = A; endmodule\n")
+    models.write_text(
+        "module sg13g2_buf_1(input A, output X); assign X = A; endmodule\n",
+        encoding="utf-8",
+    )
 
     registered_backends: dict[str, object] = {}
     prepared_backends: dict[str, object] = {}
@@ -198,11 +219,7 @@ def _make_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
         backend_runs = []
         routed_digest = None
         for attempt in (1, 2):
-            attempt_root = (
-                root
-                / "downloaded-runs"
-                / f"openroad-physical-run-{backend}-{attempt}"
-            )
+            attempt_root = root / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
             routed_path = attempt_root / "results" / backend / f"attempt-{attempt}" / "6_final.v"
             routed_path.parent.mkdir(parents=True)
             routed_path.write_text(
@@ -273,58 +290,97 @@ def _write_reference(
     *,
     mismatch: bool = False,
 ) -> None:
+    root = path.parent / "physical"
+    physical = json.loads(
+        (root / "evidence" / "openroad_physical_evidence.json").read_text(encoding="utf-8")
+    )
     backends: dict[str, object] = {}
     negative_counts = {"data": 1, "valid": 1, "reset": 49}
     for backend in _common._BACKENDS:
         source = source_values[backend]
         top = source["top"]
-        script_digests = []
+        routed_digest = physical["backends"][backend]["runs"][0]["artifacts"][
+            "final_verilog"
+        ]["sha256"]
+        gate_wrappers = []
+        base_cases = []
+        inductions = []
         for attempt in (1, 2):
-            script = ppe.emit_equivalence_script(
-                source_top=top,
-                gate_top=f"{top}_routed_attempt_{attempt}",
+            gate_top = f"{top}_routed_attempt_{attempt}"
+            gate_wrapper = ppe.emit_passthrough_wrapper(
+                routed_top=top,
+                wrapper_top=gate_top,
+                input_bits=2,
+                output_bits=2,
             )
-            script_digests.append(hashlib.sha256(script.encode()).hexdigest())
+            base_script = ppe.emit_bounded_reset_script(
+                source_top=top,
+                gate_top=gate_top,
+                expect_counterexample=False,
+            )
+            induction_script = ppe.emit_equivalence_script(
+                source_top=top,
+                gate_top=gate_top,
+            )
+            gate_wrappers.append(_sha256_text(gate_wrapper))
+            base_cases.append(
+                {
+                    "script_sha256": _sha256_text(base_script),
+                    "equiv_cells_total": 49,
+                    "proof_success": True,
+                }
+            )
+            inductions.append(
+                {
+                    "script_sha256": _sha256_text(induction_script),
+                    "equiv_cells_total": 49,
+                    "equiv_cells_proven": 49,
+                    "equiv_cells_unproven": 0,
+                }
+            )
         controls: dict[str, object] = {}
         for fault in _common._FAULTS:
+            gate_top = f"{top}_negative_{fault}"
             wrapper = ppe.emit_fault_wrapper(
                 routed_top=top,
-                wrapper_top=f"{top}_negative_{fault}",
+                wrapper_top=gate_top,
                 input_bits=2,
                 output_bits=2,
                 fault=fault,
             )
-            script = ppe.emit_equivalence_script(
+            base_script = ppe.emit_bounded_reset_script(
                 source_top=top,
-                gate_top=f"{top}_negative_{fault}",
+                gate_top=gate_top,
+                expect_counterexample=True,
+            )
+            induction_script = ppe.emit_equivalence_script(
+                source_top=top,
+                gate_top=gate_top,
             )
             controls[fault] = {
-                "wrapper_sha256": hashlib.sha256(wrapper.encode()).hexdigest(),
-                "script_sha256": hashlib.sha256(script.encode()).hexdigest(),
-                "negative_unproven_cells": negative_counts[fault],
+                "wrapper_sha256": _sha256_text(wrapper),
+                "reset_synchronized_base_case": {
+                    "script_sha256": _sha256_text(base_script),
+                    "equiv_cells_total": 49,
+                    "counterexample_found": True,
+                },
+                "steady_state_induction": {
+                    "script_sha256": _sha256_text(induction_script),
+                    "negative_unproven_cells": negative_counts[fault],
+                },
             }
         backends[backend] = {
             "source_core_sha256": source["core_sha256"],
             "source_wrapper_sha256": source["wrapper_sha256"],
-            "routed_verilog_sha256": ["TO_BE_FILLED", "TO_BE_FILLED"],
-            "proof_script_sha256": script_digests,
-            "equiv_cells_total": [49, 49],
-            "equiv_cells_proven": [49, 49],
-            "equiv_cells_unproven": [0, 0],
+            "routed_verilog_sha256": [routed_digest, routed_digest],
+            "gate_wrapper_sha256": gate_wrappers,
+            "reset_synchronized_base_case": base_cases,
+            "steady_state_induction": inductions,
             "negative_controls": controls,
         }
 
-    root = path.parent / "physical"
-    physical = json.loads(
-        (root / "evidence" / "openroad_physical_evidence.json").read_text(encoding="utf-8")
-    )
-    for backend in _common._BACKENDS:
-        digest = physical["backends"][backend]["runs"][0]["artifacts"]["final_verilog"][
-            "sha256"
-        ]
-        backends[backend]["routed_verilog_sha256"] = [digest, digest]
     if mismatch:
-        backends["shared_dag"]["equiv_cells_total"] = [48, 48]
+        backends["shared_dag"]["steady_state_induction"][0]["equiv_cells_total"] = 48
     reference = {
         "schema": "hephaestus.post-physical-equivalence-reference.v1",
         "reference_id": "ihp-sg13g2-post-physical-equivalence-tiny-v1",
@@ -354,7 +410,38 @@ def _mock_tools(monkeypatch: pytest.MonkeyPatch) -> None:
             "version_file_sha256": _sha256(path),
         }
 
-    def run_yosys(
+    def run_bounded(
+        _: str,
+        workdir: Path,
+        script: Path,
+        *,
+        timeout: int,
+        expect_counterexample: bool,
+    ) -> dict[str, object]:
+        assert timeout == 300
+        stdout = workdir / f"{script.stem}.stdout.txt"
+        stderr = workdir / f"{script.stem}.stderr.txt"
+        stdout.write_text("mock bounded proof log\n", encoding="utf-8")
+        stderr.write_text("", encoding="utf-8")
+        return {
+            "passed": True,
+            "expected_counterexample": expect_counterexample,
+            "returncode": 0,
+            "timed_out": False,
+            "sat_pass_started": True,
+            "equiv_cells_total": 49,
+            "proof_success": not expect_counterexample,
+            "counterexample_found": expect_counterexample,
+            "cycles": 5,
+            "prove_skip": 1,
+            "reset_sequence": [1, 0, 0, 0, 0],
+            "stdout": stdout.name,
+            "stdout_sha256": _sha256(stdout),
+            "stderr": stderr.name,
+            "stderr_sha256": _sha256(stderr),
+        }
+
+    def run_induction(
         _: str,
         workdir: Path,
         script: Path,
@@ -365,7 +452,7 @@ def _mock_tools(monkeypatch: pytest.MonkeyPatch) -> None:
         assert timeout == 300
         stdout = workdir / f"{script.stem}.stdout.txt"
         stderr = workdir / f"{script.stem}.stderr.txt"
-        stdout.write_text("mock proof log\n", encoding="utf-8")
+        stdout.write_text("mock induction log\n", encoding="utf-8")
         stderr.write_text("", encoding="utf-8")
         if expect_equivalent:
             return {
@@ -384,7 +471,6 @@ def _mock_tools(monkeypatch: pytest.MonkeyPatch) -> None:
                 "stderr": stderr.name,
                 "stderr_sha256": _sha256(stderr),
             }
-        fault = workdir.name
         counts = {"data": 1, "valid": 1, "reset": 49}
         return {
             "passed": True,
@@ -395,7 +481,7 @@ def _mock_tools(monkeypatch: pytest.MonkeyPatch) -> None:
             "equiv_cells_total": None,
             "equiv_cells_proven": None,
             "equiv_cells_unproven": None,
-            "negative_unproven_cells": counts[fault],
+            "negative_unproven_cells": counts[workdir.name],
             "induction_step_reached": 4,
             "stdout": stdout.name,
             "stdout_sha256": _sha256(stdout),
@@ -404,10 +490,27 @@ def _mock_tools(monkeypatch: pytest.MonkeyPatch) -> None:
         }
 
     monkeypatch.setattr(_builder, "_capture_yosys_version", capture_version)
-    monkeypatch.setattr(_builder, "_run_yosys", run_yosys)
+    monkeypatch.setattr(_builder, "_run_bounded_yosys", run_bounded)
+    monkeypatch.setattr(_builder, "_run_yosys", run_induction)
 
 
-def test_equivalence_script_uses_compositional_sequential_flow() -> None:
+def test_bounded_reset_script_establishes_induction_base_case() -> None:
+    script = ppe.emit_bounded_reset_script(
+        source_top="source",
+        gate_top="gate",
+        expect_counterexample=False,
+    )
+
+    assert "equiv_make gold gate equiv" in script
+    assert "equiv_miter -assert reset_miter" in script
+    assert "sat -verify -seq 5" in script
+    assert "-prove-skip 1" in script
+    assert "-prove-asserts" in script
+    assert "-set-at 1 reset 1" in script
+    assert "-set-at 5 reset 0" in script
+
+
+def test_equivalence_script_uses_steady_state_induction() -> None:
     script = ppe.emit_equivalence_script(source_top="source", gate_top="gate")
 
     assert "equiv_make gold gate equiv" in script
@@ -435,6 +538,54 @@ def test_fault_wrappers_are_independent(fault: str) -> None:
         assert "assign valid_out = delayed_valid;" in wrapper
     else:
         assert ".reset(1'b0)" in wrapper
+
+
+def test_bounded_parser_accepts_proof_and_counterexample(tmp_path: Path) -> None:
+    script = tmp_path / "proof.ys"
+    script.write_text("# fixture\n", encoding="utf-8")
+    positive = tmp_path / "positive-yosys"
+    positive.write_text(
+        "#!/bin/sh\n"
+        "cat <<'EOF'\n"
+        "Found 49 $equiv cells in equiv:\n"
+        "  Of those cells 0 are proven and 49 are unproven.\n"
+        "Executing SAT pass.\n"
+        "SAT proof finished - no model found: SUCCESS!\n"
+        "EOF\n",
+        encoding="utf-8",
+    )
+    positive.chmod(0o755)
+    result = _proof._run_bounded_yosys(
+        str(positive),
+        tmp_path,
+        script,
+        timeout=30,
+        expect_counterexample=False,
+    )
+    assert result["passed"] is True
+    assert result["equiv_cells_total"] == 49
+
+    negative = tmp_path / "negative-yosys"
+    negative.write_text(
+        "#!/bin/sh\n"
+        "cat <<'EOF'\n"
+        "Found 49 $equiv cells in equiv:\n"
+        "  Of those cells 0 are proven and 49 are unproven.\n"
+        "Executing SAT pass.\n"
+        "SAT proof finished - model found: FAIL!\n"
+        "EOF\n",
+        encoding="utf-8",
+    )
+    negative.chmod(0o755)
+    result = _proof._run_bounded_yosys(
+        str(negative),
+        tmp_path,
+        script,
+        timeout=30,
+        expect_counterexample=True,
+    )
+    assert result["passed"] is True
+    assert result["counterexample_found"] is True
 
 
 def test_yosys_result_parser_accepts_only_final_equiv_status(tmp_path: Path) -> None:
@@ -472,7 +623,7 @@ def test_yosys_result_parser_accepts_only_final_equiv_status(tmp_path: Path) -> 
     assert result["induction_step_reached"] == 2
 
 
-def test_build_evidence_binds_six_attempts_and_nine_controls(
+def test_build_evidence_binds_six_attempts_and_both_obligations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -494,8 +645,16 @@ def test_build_evidence_binds_six_attempts_and_nine_controls(
     assert sum(len(value["attempts"]) for value in evidence["backends"].values()) == 6
     assert sum(len(value["negative_controls"]) for value in evidence["backends"].values()) == 9
     assert all(
-        value["both_physical_attempts_bound"] and value["passed"]
-        for value in evidence["backends"].values()
+        attempt["reset_synchronized_base_case"]["passed"]
+        and attempt["steady_state_induction"]["passed"]
+        for backend in evidence["backends"].values()
+        for attempt in backend["attempts"]
+    )
+    assert all(
+        control["reset_synchronized_base_case"]["passed"]
+        and control["steady_state_induction"]["passed"]
+        for backend in evidence["backends"].values()
+        for control in backend["negative_controls"].values()
     )
 
 
@@ -506,12 +665,7 @@ def test_mutated_second_run_manifest_fails_closed(
     root, models, reference, source_values = _make_fixture(tmp_path)
     _write_reference(reference, models, source_values)
     _mock_tools(monkeypatch)
-    path = (
-        root
-        / "downloaded-runs"
-        / "openroad-physical-run-shared_dag-2"
-        / "openroad_run.json"
-    )
+    path = root / "downloaded-runs" / "openroad-physical-run-shared_dag-2" / "openroad_run.json"
     value = json.loads(path.read_text(encoding="utf-8"))
     value["source"]["wrapper_sha256"] = "0" * 64
     _write_json(path, value)
