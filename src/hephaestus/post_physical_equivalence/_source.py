@@ -12,14 +12,27 @@ from ._common import (
     _require_claims,
     _require_digest,
     _require_positive_int,
+    _resolve_under,
     _sha256,
 )
 
 
 def _validate_source_chain(root: Path) -> dict[str, Any]:
-    evidence_path = root / "evidence" / "openroad_physical_evidence.json"
-    prepared_path = root / "prepared" / "prepared.json"
-    registered_path = root / "prepared" / "registered" / "registered_manifest.json"
+    evidence_path = _resolve_under(
+        root,
+        "evidence/openroad_physical_evidence.json",
+        context="physical evidence manifest",
+    )
+    prepared_path = _resolve_under(
+        root,
+        "prepared/prepared.json",
+        context="prepared manifest",
+    )
+    registered_path = _resolve_under(
+        root,
+        "prepared/registered/registered_manifest.json",
+        context="registered manifest",
+    )
     physical = _load_json(evidence_path)
     prepared = _load_json(prepared_path)
     registered = _load_json(registered_path)
