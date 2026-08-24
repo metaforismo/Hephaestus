@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import hephaestus.post_physical_equivalence as ppe
-from hephaestus.post_physical_equivalence import _common
+from hephaestus.post_physical_equivalence import _common, _source
 
 
 def test_resolve_under_rejects_a_direct_symlink(tmp_path: Path) -> None:
@@ -42,6 +42,19 @@ def test_resolve_under_rejects_parent_traversal_before_resolution(tmp_path: Path
 
     with pytest.raises(ppe.PostPhysicalEquivalenceError, match="parent traversal"):
         _common._resolve_under(root, "../outside.v", context="escape")
+
+
+def test_source_chain_rejects_a_symlinked_root_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "physical"
+    evidence_dir = root / "evidence"
+    evidence_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    manifest = evidence_dir / "openroad_physical_evidence.json"
+    manifest.symlink_to(outside)
+
+    with pytest.raises(ppe.PostPhysicalEquivalenceError, match="symlinks"):
+        _source._validate_source_chain(root)
 
 
 def test_public_builder_rejects_symlinked_models_before_reading_inputs(
