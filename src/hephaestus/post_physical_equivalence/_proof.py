@@ -285,6 +285,10 @@ def _print_failure_diagnostics(
     print("\n".join(stderr.splitlines()[-160:]), file=sys.stderr)
 
 
+def _miter_seed_count(stdout: str) -> int:
+    return sum(line.lstrip().startswith("Seed $equiv cell:") for line in stdout.splitlines())
+
+
 def _run_bounded_yosys(
     executable: str,
     workdir: Path,
@@ -303,11 +307,13 @@ def _run_bounded_yosys(
     combined = stdout + "\n" + stderr
     status_matches = list(_STATUS_RE.finditer(stdout))
     final_status = status_matches[-1] if status_matches else None
-    total = int(final_status.group("total")) if final_status else None
+    status_total = int(final_status.group("total")) if final_status else None
+    seed_count = _miter_seed_count(stdout)
+    total = status_total if status_total is not None else seed_count
     sat_started = "Executing SAT pass." in stdout
     proof_success = _SAT_SUCCESS_MARKER in combined
     counterexample = _SAT_FAILURE_MARKER in combined
-    nonvacuous = total is not None and total > 0
+    nonvacuous = seed_count > 0 and total > 0
     if expect_counterexample:
         passed = (
             not timed_out
@@ -341,6 +347,7 @@ def _run_bounded_yosys(
         "timed_out": timed_out,
         "sat_pass_started": sat_started,
         "equiv_cells_total": total,
+        "miter_seed_cells": seed_count,
         "proof_success": proof_success,
         "counterexample_found": counterexample,
         "cycles": _BASE_CASE_CYCLES,
