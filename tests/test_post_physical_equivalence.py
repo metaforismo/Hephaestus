@@ -299,9 +299,9 @@ def _write_reference(
     for backend in _common._BACKENDS:
         source = source_values[backend]
         top = source["top"]
-        routed_digest = physical["backends"][backend]["runs"][0]["artifacts"][
-            "final_verilog"
-        ]["sha256"]
+        routed_digest = physical["backends"][backend]["runs"][0]["artifacts"]["final_verilog"][
+            "sha256"
+        ]
         gate_wrappers = []
         base_cases = []
         inductions = []
