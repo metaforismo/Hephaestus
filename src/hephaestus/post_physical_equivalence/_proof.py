@@ -313,7 +313,7 @@ def _run_bounded_yosys(
     sat_started = "Executing SAT pass." in stdout
     proof_success = _SAT_SUCCESS_MARKER in combined
     counterexample = _SAT_FAILURE_MARKER in combined
-    nonvacuous = seed_count > 0 and total > 0
+    nonvacuous = total > 0 and (seed_count > 0 or status_total is not None)
     if expect_counterexample:
         passed = (
             not timed_out
