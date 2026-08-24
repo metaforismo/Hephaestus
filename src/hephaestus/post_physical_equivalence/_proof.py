@@ -310,7 +310,7 @@ def _run_bounded_yosys(
     status_total = int(final_status.group("total")) if final_status else None
     seed_count = _miter_seed_count(stdout)
     total = status_total if status_total is not None else seed_count
-    sat_started = "Executing SAT pass." in stdout
+    sat_started = "Executing SAT pass" in stdout
     proof_success = _SAT_SUCCESS_MARKER in combined
     counterexample = _SAT_FAILURE_MARKER in combined
     nonvacuous = total > 0 and (seed_count > 0 or status_total is not None)
