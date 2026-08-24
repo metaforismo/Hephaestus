@@ -1,0 +1,296 @@
+{
+  "reference_id": "ihp-sg13g2-post-physical-equivalence-tiny-v1",
+  "schema": "hephaestus.post-physical-equivalence-reference.v1",
+  "stable_projection": {
+    "backends": {
+      "constant_multipliers": {
+        "gate_wrapper_sha256": [
+          "ce0680731e5b6be11e54831ef324139195e0827ea7bed44f35845796e4cd58fe",
+          "fbe0bf6cd3f43368f553163ec7ba772e8e938f4cc2446ba0971ec3be71fbbcd8"
+        ],
+        "negative_controls": {
+          "data": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "f9f7a7fb8c79af6faddfd263d800fc4ad985e931c35752bc481d8fa1d4fe6669"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "5fde0267b024a895ca37ec30e2b0defa5bea385116921cc61a689a9d14246865",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "965db2aa07ab2bcfced1b71d542d47571de12c2edcda5c49aecb1f809613aaff"
+          },
+          "reset": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "730efc73f68a532deb2cf112bdfdc79c2fe7a9a5c902173728db3ceae897c37b"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "348d0a2caacec9ce374ef7c58d0f55427ff026580f3a289103bcc4333c9db8d5",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "e9e6ecb10bc9f0e727cd1450bd90d8d82e87eb260dfa390549e9966e47ccf4ad"
+          },
+          "valid": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "dbe7cb9b5765ba2e09fe535363e96a89baff0ffc1e253a2ffea874d4bd076bcb"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "c68cb1ae95d3937ae137206ab8dabc3ea51d33bec1b33c6175ac3907de825677",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "8ffa8518ac13247897f182daeb55dbd672962cb3db2bb571850e9b35174a2529"
+          }
+        },
+        "reset_synchronized_base_case": [
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "01c34a0402d14a36fdd57c2eddbee9ccfa6a41900a5f7c1e84479c6f31b28dff"
+          },
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "4a5695c439ca4a0dc2a80e69fbb861850c6cff1e45c7f2c47e5b299958c40ea6"
+          }
+        ],
+        "routed_verilog_sha256": [
+          "f29962a555d566216fa608cc7a958453aff4a6840a106cfa3821310d019ff103",
+          "f29962a555d566216fa608cc7a958453aff4a6840a106cfa3821310d019ff103"
+        ],
+        "source_core_sha256": "7788892809e2e602dedd0ebfb79289d15a4cdffeddab3cdb9a595943fcf46a61",
+        "source_wrapper_sha256": "8394d02789bbcf3bf5022052ae4dbfb19bfa03d7248dbec2d134b5269d613a4d",
+        "steady_state_induction": [
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "21627c6bace6dabc08bacf8dc3af88ed2a82e3d3f81af8d77b879a8a03e29919"
+          },
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "a7e45966517c4ae4a0a3071d1ab6bff03d6ea7f990f7e69ec7161df62d5759fe"
+          }
+        ]
+      },
+      "naive_shift_add": {
+        "gate_wrapper_sha256": [
+          "3affe2fbb51067ef71a3810d5f35098ff3c185660248ddd1cf3ef3c42ae4a5b8",
+          "d6b46ac271e24032b7cfdb08dfc8b1a5c8034d2d807f19b9c229eed2449df537"
+        ],
+        "negative_controls": {
+          "data": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "f857982fe9b4e708ee5e4e3a5f7f9a286288ce1f7af84d34ac51aa769aa84a5c"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "6cae0a0c7097279dc6058937e6548508d2d79cf591a96d73fdb1fef89261f471",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "0f846d33454dd5cddf50c51750d9c80659ff0f3d8ee39ae6da058ce43ccdd84b"
+          },
+          "reset": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "324a6ac9e55ebf75a7724bb52edf9aa4666262a438fc885678418dab88611ccc"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "e7023365005356a8dc872ca384794602bcf70100b1087bc4668e46104472ba27",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "29356fc2e02cf7758b1a2f5da79da950516564d818b051fb848a1c0db1870168"
+          },
+          "valid": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "c89e33cd1ae1fed32123fcb06be2c0288c3c10380df2277d7638467649c7f028"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "c6df30cc8282d09e09aefbc7a0f90a72f327ae66ce64a88e6acae52857465111",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "e8961807fcfbcea3a234cfb2c8ee1495ae7284ef2335f22a8a9d755c16bba57f"
+          }
+        },
+        "reset_synchronized_base_case": [
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "f02152061f6f072d0ab99f145cb5c180542c7c0a03da4c8e22e2c543b1dbfd2e"
+          },
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "d4a2bf3e6f973e6cf780f67fd9c46d5e0d1c02c9f4cf48ced40de49c5c836448"
+          }
+        ],
+        "routed_verilog_sha256": [
+          "d95eccf2b637607db87a7706f076f44fb1bf7ffbe3ba4e2ce6005e81fdd800b5",
+          "d95eccf2b637607db87a7706f076f44fb1bf7ffbe3ba4e2ce6005e81fdd800b5"
+        ],
+        "source_core_sha256": "e7d55addbfe2827d4e4cc6e170afa7834905cf5158719d566eda55f03234fb35",
+        "source_wrapper_sha256": "ab725694e5c2ab4deca558d50593509600e7752c9495dcbaf50d6bda1427b6d6",
+        "steady_state_induction": [
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "14b4847a0e43c9bdc6fcba479635451755d21151cb3682ab20905fda8cd5b6cd"
+          },
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "402bb02525a7589c7dcbdf1160ef4e7887e2142c2acf7054f9e4fa127ceef0e5"
+          }
+        ]
+      },
+      "shared_dag": {
+        "gate_wrapper_sha256": [
+          "0ea25034bf44aa9add9e6cb0781208f7ea0289780ddafed9b2c67dd05dbd2089",
+          "24617f9ea4942de739b43bb97a403a7f575de6afe56a4d66c8ca0b7ef859a84c"
+        ],
+        "negative_controls": {
+          "data": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "ab328af9132962230f490f030841c9178c4a62d840d35703cfeca2eeeda2a344"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "3ce0aa43892008d92a11aa80d5e40dc8942ee3c7b2daa3ca64e465cdc503e3b1",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "ff9237c441b673c65e17e1dee912ed386ae062f38726fac79a5950d0c4884dcb"
+          },
+          "reset": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "7ceb494241bda420a7911725fc11f6ecd7360b8f59a22ad7615ede7d09a6a7f9"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "c7368a5e129bffe0af2bfc57590e0514fda01858a47a20fa185696e5a55f58b5",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "6248b58b8d9e867dde8eee74eaf1c63e1c46e7bceb5f323116621e0224606657"
+          },
+          "valid": {
+            "reset_synchronized_base_case": {
+              "counterexample_found": true,
+              "equiv_cells_total": 49,
+              "script_sha256": "b6690c7dacced48d2ed2f4671b322b6169e515df3578b852a497dd70f35ad736"
+            },
+            "steady_state_induction": {
+              "negative_control_passed": true,
+              "script_sha256": "3068a7b6ebbeff58acb3d3c0221f43e813c80e0bb998944d5151179d131aa065",
+              "unproven_equivalence_detected": true
+            },
+            "wrapper_sha256": "300f0ee9f84502f07be32842a5f5c3b4110588139f81ba1d1045ccec54cd0a7e"
+          }
+        },
+        "reset_synchronized_base_case": [
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "448eda407e49637e69331865fdddf1196b10b9a2b9cad88ea6c312e567d32566"
+          },
+          {
+            "equiv_cells_total": 49,
+            "proof_success": true,
+            "script_sha256": "ba18e9e24dbacff3e501d13e8d4414cedbd0f768fc4dc48e01676b036acca1f7"
+          }
+        ],
+        "routed_verilog_sha256": [
+          "9a8b0bf370d5a7013dcac059361b9fa36934eefb454b5c661c269c64c949b4fa",
+          "9a8b0bf370d5a7013dcac059361b9fa36934eefb454b5c661c269c64c949b4fa"
+        ],
+        "source_core_sha256": "e23569c970e65984072d88ddbb5a8217f35f31b5c03e1aa13c3d70fb7c4d34ae",
+        "source_wrapper_sha256": "dede182145a2ed7e886ba7a78e914c136e808202f5e2633fe7f54942c4c47940",
+        "steady_state_induction": [
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "65e97dfe0dd23967192e86c15b749f4d3efbc7b8f7a41f74616709049effed0f"
+          },
+          {
+            "equiv_cells_proven": 49,
+            "equiv_cells_total": 49,
+            "equiv_cells_unproven": 0,
+            "script_sha256": "be9cccc250559d13a9c53f4a4ebc5fb2092852651e7d35fa01e6bdbeec1cdb73"
+          }
+        ]
+      }
+    },
+    "claims": {
+      "all_three_routed_registered_implementations_equivalent": true,
+      "both_physical_attempts_per_backend_bound": true,
+      "comparative_ppa_claim_enabled": true,
+      "data_corruption_negative_control_detected": true,
+      "drc_clean": false,
+      "foundry_signoff_complete": false,
+      "four_state_semantics_verified": false,
+      "lvs_clean": false,
+      "post_layout_pex_verified": false,
+      "post_physical_equivalence_verified": true,
+      "power_estimated_with_activity": false,
+      "registered_source_binding_verified": true,
+      "reset_state_negative_control_detected": true,
+      "silicon_verified": false,
+      "timing_annotated_functional_semantics_verified": false,
+      "valid_latency_negative_control_detected": true
+    },
+    "functional_cell_models_sha256": "f3f8c5e32abb3d3a042c8bf6ae500c54cfc0b6cdee01c953d8bea46dee0fbdce",
+    "proof_contract": {
+      "attempts_per_backend": 2,
+      "bounded_reset_cycles": 5,
+      "bounded_reset_prove_skip": 1,
+      "bounded_reset_sequence": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "equiv_induct_sequence_length": 4,
+      "method": [
+        "equiv_make",
+        "equiv_miter",
+        "bounded_sat_reset_base_case",
+        "equiv_struct",
+        "equiv_simple",
+        "equiv_induct"
+      ],
+      "negative_controls": [
+        "data",
+        "valid",
+        "reset"
+      ],
+      "positive_base_cases_per_backend": 2,
+      "positive_induction_proofs_per_backend": 2,
+      "reset_model": "source synchronous active-high reset; routed reset normalized with async2sync; arbitrary asynchronous between-edge reset events are excluded",
+      "semantics": "two-state zero-delay clock-edge functional sequential equivalence"
+    },
+    "reference_id": "ihp-sg13g2-post-physical-equivalence-tiny-v1",
+    "yosys_version": "Yosys 0.33 (git sha1 2584903a060)"
+  }
+}

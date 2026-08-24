@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -159,6 +161,8 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -208,6 +212,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -334,5 +340,124 @@ jobs:
             build/openroad-physical/downloaded-runs/**/metadata.json
             build/openroad-physical/downloaded-runs/**/tool-versions.txt
             build/openroad-physical/negative-control.*.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  post-physical-equivalence:
+    needs: bind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the pinned sequential proof tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+          yosys -V
+
+      - name: Install, lint, and test the permanent evidence builder
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/post_physical_equivalence \
+            tests/test_post_physical_equivalence*.py
+          ruff format --check \
+            src/hephaestus/post_physical_equivalence \
+            tests/test_post_physical_equivalence*.py
+          pytest tests/test_post_physical_equivalence*.py
+          python -m hephaestus.post_physical_equivalence --help
+
+      - name: Download the same-run matched physical evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: hephaestus-ihp-openroad-physical-evidence
+          path: build/post-physical/physical
+
+      - name: Prove both routed attempts for all three registered backends
+        run: |
+          python -m hephaestus.post_physical_equivalence \
+            build/post-physical/physical \
+            --models \
+              flows/openroad/post_physical_equivalence/ihp_sg13g2_formal_models.v \
+            --reference \
+              benchmarks/reference/ihp_sg13g2_post_physical_equivalence_tiny_v1.json \
+            --out build/post-physical/equivalence \
+            --timeout 300 \
+            --source-revision '${{ github.event.pull_request.head.sha || github.sha }}'
+
+      - name: Validate the qualified claim boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(
+              'build/post-physical/equivalence/'
+              'post_physical_equivalence_evidence.json'
+          )
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == (
+              'hephaestus.post-physical-equivalence-evidence.v1'
+          )
+          assert evidence['execution']['source_revision'] == (
+              '${{ github.event.pull_request.head.sha || github.sha }}'
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['passed']
+              and backend['both_physical_attempts_bound']
+              and len(backend['attempts']) == 2
+              and set(backend['negative_controls']) == {'data', 'valid', 'reset'}
+              for backend in evidence['backends'].values()
+          )
+          assert evidence['regression']['passed'] is True
+          assert evidence['claims'] == {
+              'registered_source_binding_verified': True,
+              'both_physical_attempts_per_backend_bound': True,
+              'all_three_routed_registered_implementations_equivalent': True,
+              'data_corruption_negative_control_detected': True,
+              'valid_latency_negative_control_detected': True,
+              'reset_state_negative_control_detected': True,
+              'post_physical_equivalence_verified': True,
+              'comparative_ppa_claim_enabled': True,
+              'four_state_semantics_verified': False,
+              'timing_annotated_functional_semantics_verified': False,
+              'drc_clean': False,
+              'lvs_clean': False,
+              'power_estimated_with_activity': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          PY
+
+      - name: Upload diagnostics after a failed qualification
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-post-physical-equivalence-failure-${{ github.run_attempt }}
+          path: build/post-physical/equivalence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the qualified post-physical equivalence evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-post-physical-equivalence-evidence
+          path: build/post-physical/equivalence
           if-no-files-found: error
           retention-days: 30
