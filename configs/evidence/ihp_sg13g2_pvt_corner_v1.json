@@ -1,0 +1,61 @@
+{
+  "attempts_per_corner": 2,
+  "backends": [
+    "shared_dag",
+    "naive_shift_add",
+    "constant_multipliers"
+  ],
+  "claim_boundary": {
+    "crosstalk_delay_analyzed": false,
+    "foundry_signoff_complete": false,
+    "foundry_signoff_sta_performed": false,
+    "ocv_aocv_pocv_analyzed": false,
+    "silicon_verified": false,
+    "statistical_variation_analyzed": false
+  },
+  "contract_id": "ihp-sg13g2-routed-pvt-corner-v1",
+  "corner_order": [
+    "slow",
+    "typ",
+    "fast"
+  ],
+  "corner_selectors": {
+    "fast": {
+      "nominal_condition": "1.32 V / -40 C",
+      "required_filename_tokens": [
+        "sg13g2",
+        "stdcell",
+        "fast",
+        "1p32",
+        "m40"
+      ]
+    },
+    "slow": {
+      "nominal_condition": "1.08 V / 125 C",
+      "required_filename_tokens": [
+        "sg13g2",
+        "stdcell",
+        "slow",
+        "1p08",
+        "125"
+      ]
+    },
+    "typ": {
+      "nominal_condition": "1.20 V / 25 C",
+      "required_filename_tokens": [
+        "sg13g2",
+        "stdcell",
+        "typ",
+        "1p20",
+        "25"
+      ]
+    }
+  },
+  "ihp_open_pdk": {
+    "commit": "22f2a25f1734796de3debbbf29cf697cbbc54081",
+    "repository": "https://github.com/IHP-GmbH/IHP-Open-PDK.git"
+  },
+  "negative_control_clock_period_ns": 0.05,
+  "schema": "hephaestus.ihp-pvt-corner-contract.v1",
+  "timeout_seconds": 600
+}
