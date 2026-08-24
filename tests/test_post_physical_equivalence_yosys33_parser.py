@@ -9,9 +9,7 @@ def _fake_yosys(tmp_path: Path, *, include_sat_banner: bool) -> Path:
     executable = tmp_path / "fake-yosys"
     seeds = "\n".join(f"Seed $equiv cell: cell_{index}" for index in range(49))
     banner = (
-        "Executing SAT pass (solving SAT problems in the circuit).\n"
-        if include_sat_banner
-        else ""
+        "Executing SAT pass (solving SAT problems in the circuit).\n" if include_sat_banner else ""
     )
     executable.write_text(
         "#!/bin/sh\n"
