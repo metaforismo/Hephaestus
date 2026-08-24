@@ -184,8 +184,7 @@ def emit_bounded_reset_script(
     if not expect_counterexample:
         sat.insert(1, "-verify")
     sat.extend(
-        f"-set-at {step} reset {value}"
-        for step, value in enumerate(_RESET_SEQUENCE, start=1)
+        f"-set-at {step} reset {value}" for step, value in enumerate(_RESET_SEQUENCE, start=1)
     )
     return "\n".join(
         [
@@ -345,9 +344,7 @@ def _run_yosys(
     combined = stdout + "\n" + stderr
     status_matches = list(_STATUS_RE.finditer(stdout))
     final_status = status_matches[-1] if status_matches else None
-    induction_steps = [
-        int(match.group("step")) for match in _INDUCTION_STEP_RE.finditer(stdout)
-    ]
+    induction_steps = [int(match.group("step")) for match in _INDUCTION_STEP_RE.finditer(stdout)]
     negative_match = _NEGATIVE_STATUS_RE.search(stderr)
 
     total = int(final_status.group("total")) if final_status else None
