@@ -8,8 +8,8 @@ from typing import Any
 
 from ._common import (
     _BACKENDS,
-    _EVIDENCE_LEVEL,
     _EQUIV_SEQUENCE_LENGTH,
+    _EVIDENCE_LEVEL,
     _FAULTS,
     _SCHEMA,
     PostPhysicalEquivalenceError,

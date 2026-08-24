@@ -111,11 +111,10 @@ def _validate_source_chain(root: Path) -> dict[str, Any]:
         (prepared.get("backends"), "prepared"),
         (registered.get("backends"), "registered"),
     ):
-        if not isinstance(value, dict) or tuple(value) != _BACKENDS:
-            if not isinstance(value, dict) or set(value) != set(_BACKENDS):
-                raise PostPhysicalEquivalenceError(
-                    f"{context} backend set differs from the matched contract"
-                )
+        if not isinstance(value, dict) or set(value) != set(_BACKENDS):
+            raise PostPhysicalEquivalenceError(
+                f"{context} backend set differs from the matched contract"
+            )
 
     contract = registered.get("contract")
     if not isinstance(contract, dict):
