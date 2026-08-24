@@ -1,26 +1,25 @@
 # Routed registered post-physical equivalence
 
-This layer proves the narrow downstream statement that the exact registered source implementation
-for each matched backend is sequentially equivalent to the exact routed `6_final.v` emitted by the
-same-head physical workflow.
+This permanent layer proves the narrow downstream statement that each exact registered source
+implementation is sequentially equivalent to each exact routed `6_final.v` emitted by the same
+source revision.
 
-It is deliberately compositional:
+## Compositional evidence chain
 
 ```text
 independent arithmetic reference
-  → exhaustive source-core proof
-  → registered source contract
-  → exact registered source RTL
+  → exhaustive source-core equivalence
+  → registered source implementation
   → two routed physical attempts per backend
   → reset-synchronized bounded base case
   → steady-state temporal induction
 ```
 
-The routed proof does not reintroduce the full arithmetic miter. That upstream contract is already
-bound by the registered and physical manifests. The permanent builder validates that chain before
-comparing each source wrapper to each routed netlist.
+The routed proof does not rebuild the expensive full arithmetic miter. Upstream manifests already
+bind the independently generated reference to each source core and registered wrapper. The
+post-physical builder verifies that entire digest chain before comparing source and routed RTL.
 
-## Same-run architecture
+## Same-source workflow
 
 The permanent entry point is:
 
@@ -30,54 +29,59 @@ python -m hephaestus.post_physical_equivalence \
   --models flows/openroad/post_physical_equivalence/ihp_sg13g2_formal_models.v \
   --reference benchmarks/reference/ihp_sg13g2_post_physical_equivalence_tiny_v1.json \
   --out build/post-physical/equivalence \
-  --source-revision "$GITHUB_SHA"
+  --source-revision "$SOURCE_REVISION"
 ```
 
-It runs as a downstream job inside `.github/workflows/openroad-physical-evidence.yml`. The job uses
-`actions/download-artifact` without a run identifier, so it can only consume the physical artifact
-created by the preceding `prepare → physical-run → bind` jobs in that workflow execution. No
-historical workflow run is part of the permanent contract.
+It runs inside `.github/workflows/openroad-physical-evidence.yml` after the physical binder and
+downloads the artifact produced by that same workflow execution. Pull-request jobs explicitly
+check out the PR branch-head SHA; push/manual jobs use the triggering SHA. There is no historical
+run ID or expiring cross-run prerequisite in permanent code.
 
 ## Binding contract
 
-Before invoking Yosys, the builder independently verifies:
+Before proof, the builder rejects any mismatch in:
 
-- the physical, prepared, and registered manifest schemas and claim boundaries;
-- the SHA-256 chain from physical evidence to the prepared and registered manifests;
-- the exact three-backend set and registered clock/reset/latency contract;
-- both bound and original `openroad_run.json` copies for all six attempts;
-- backend, attempt, source-core, source-wrapper, prepared, and registered identities in every run;
-- the final routed-Verilog path and digest in both the run manifest and physical evidence;
-- byte-identical routed Verilog across the two attempts required by physical repeatability;
-- the functional IHP cell-model digest and the pinned regression reference.
+- physical, prepared, registered, and run-manifest schemas;
+- prerequisite claim boundaries;
+- exact backend and attempt identities;
+- registered dimensions, latency, valid, and reset contract;
+- physical-to-prepared and physical-to-registered SHA-256 links;
+- bound versus original `openroad_run.json` bytes;
+- source core and wrapper identities for every attempt;
+- routed-Verilog metadata and content;
+- both-attempt repeatability;
+- functional IHP model and regression-reference digests;
+- unsafe, overlapping, pre-existing, or destructive output paths.
 
-Every proof directory preserves the exact source core, source wrapper, routed netlist, functional
-cell models, generated wrapper, Yosys scripts, stdout, stderr, and their digests.
+Each artifact preserves source RTL, routed RTL, functional models, generated wrappers, proof
+scripts, stdout, stderr, manifests, tool identity, revision metadata, and SHA-256 provenance.
 
-## Why the proof has two obligations
+## Why two proof obligations
 
-Yosys documents `equiv_induct` as a weak temporal-induction relation: it establishes that two
-circuits cannot diverge after their observable equivalence points have already remained equal for
-the selected sequence length. It is therefore not used alone.
+Yosys describes `equiv_induct` as a weak temporal induction relation: it proves non-divergence once
+observable points have already remained equal for the selected sequence length. It is therefore not
+used by itself.
 
-For every routed attempt, the permanent gate requires both:
+Every routed attempt must pass both obligations.
 
-1. a bounded reset-synchronized base case that establishes four consecutive equal observable
-   cycles after reset; and
-2. a steady-state induction proof with `equiv_induct -seq 4`.
+### 1. Reset-synchronized bounded base case
 
-The base case is generated directly from the `equiv_make` result with `equiv_miter -assert`, then
-checked over five symbolic cycles:
+The builder converts the `equiv_make` result into assertions with `equiv_miter -assert` and invokes
+bounded SAT over five symbolic cycles:
 
 ```text
 cycle 1: reset asserted
 cycles 2–5: reset released
-assertions checked on cycles 2–5
+assertions checked across cycles 2–5
 initial state: arbitrary but defined
 inputs: arbitrary but defined
 ```
 
-The steady-state obligation independently runs:
+The proof is accepted only when the SAT pass actually runs, the equivalence set is nonempty, no
+counterexample exists, the success marker is present, the process exits cleanly, and no timeout
+occurs.
+
+### 2. Steady-state induction
 
 ```text
 equiv_make
@@ -87,67 +91,77 @@ equiv_induct -seq 4
 equiv_status -assert
 ```
 
-A positive result is accepted only when the bounded SAT proof reaches the SAT pass with a nonzero
-set of equivalence points and finds no counterexample, while the final induction status reports a
-nonzero number of cells, all cells proven, zero unproven cells, a zero exit status, no timeout, and
-the final success marker.
+The result is accepted only when a nonzero equivalence set is reported, every point is proven, zero
+points remain unproven, the final success marker is present, and the process exits cleanly.
+
+For the pinned 48-bit input/48-bit output microcase, both obligations cover 49 observable
+points: 48 data bits plus valid.
 
 ## Reset semantics
 
-The registered source contract uses synchronous active-high reset. The routed IHP implementation
-contains technology flip-flops with asynchronous reset pins. Both sides are normalized with Yosys
-`async2sync` before the two proof obligations.
+The registered source uses synchronous active-high reset. Routed IHP flip-flops expose asynchronous
+reset pins. Both sides are normalized with `async2sync` before proof.
 
-The qualified statement is therefore limited to the declared **clock-edge transaction behavior
-after the explicit reset sequence**. It does not claim equivalence for arbitrary asynchronous reset
-transitions between clock edges, analog reset behavior, metastability, or arbitrary unreset power-up
-recovery.
+The qualified statement is limited to clock-edge transaction behavior after the explicit reset
+sequence. It excludes arbitrary asynchronous transitions between edges, analog reset behavior,
+metastability, and arbitrary unreset power-up recovery.
 
 ## Negative controls
 
-One independent control of each class is required for every backend:
+Every backend has three independent fault classes:
 
 - **data:** invert one routed output bit;
-- **valid latency:** insert an additional valid register;
-- **reset state:** disconnect the routed implementation from the declared reset.
+- **valid:** insert an extra valid register;
+- **reset:** disconnect routed reset.
 
-Each control must fail both obligations in the expected way:
+Each control must:
 
-- the bounded reset miter must reach SAT and produce a real counterexample;
-- the induction flow must reach `equiv_status -assert` and leave one or more equivalence cells
-  unproven.
+1. reach bounded SAT with a nonempty equivalence set and produce a real counterexample; and
+2. reach `equiv_status -assert` and leave at least one equivalence point unproven.
 
-Syntax errors, missing inputs, timeouts, tool crashes, empty equivalence sets, and generic nonzero
-exit codes are not accepted as negative-control success.
+Syntax errors, absent inputs, empty equivalence sets, timeouts, crashes, and generic nonzero exits do
+not count as successful controls.
+
+The full artifact records the exact unproven-cell count. The regression reference intentionally
+pins the semantic predicate `unproven_equivalence_detected = true`, not the solver decomposition
+count: the same effective fault may leave one or many points unresolved depending on structural
+proof progress. A zero count is always rejected.
 
 ## Regression policy
 
-The reference pins only stable invariants:
+Pinned stable invariants include:
 
-- exact source-core, source-wrapper, routed-netlist, functional-model, generated-wrapper, and proof
-  script digests;
-- the pinned Yosys version;
-- bounded-reset sequence, proof method, and induction sequence length;
-- proved/unproven induction cell counts;
-- expected negative-control counterexample and unproven-cell observations;
-- the explicit claim boundary.
+- exact source-core, wrapper, routed-netlist, model, generated-wrapper, and script digests;
+- pinned Yosys version;
+- reset sequence and proof method;
+- positive equivalence-cell coverage;
+- bounded negative-control counterexamples;
+- induction negative-control detection;
+- explicit true and false claim fields.
 
-It does not pin raw runtime, CPU time, memory use, log hashes, GitHub run IDs, or other execution
-noise. The full evidence manifest still records the exact current manifests, logs, source revision,
-and workflow provenance.
+Not pinned:
 
-## Claim boundary
+- CPU time, memory, log hashes, GitHub run ID, runner image noise;
+- the exact number of negative-control points left unproven.
 
-Only a qualifying exact-head run enables these statements for the registered 4×6 IHP SG13G2
-regression microcase:
+Those observations remain in the complete evidence manifest and raw logs.
+
+## Qualified claim boundary
+
+A qualifying artifact may enable, for the exact registered 4×6 IHP SG13G2 contract:
 
 ```text
 post_physical_equivalence_verified = true
 comparative_ppa_claim_enabled = true
 ```
 
-The comparison remains limited to the declared two-state, zero-delay, clock-edge functional
-semantics and the common physical boundary. It does not establish four-state behavior,
-timing-annotated behavior, arbitrary asynchronous-reset-event equivalence, independent DRC, LVS,
-validated PEX, activity-based power, foundry sign-off, universal architectural superiority, or
-silicon behavior.
+It does not establish:
+
+- four-state or timing-annotated behavior;
+- arbitrary asynchronous-reset-event equivalence;
+- independent DRC or LVS;
+- activity-qualified power;
+- validated PEX;
+- foundry sign-off;
+- model-level or universal architectural superiority;
+- silicon behavior.

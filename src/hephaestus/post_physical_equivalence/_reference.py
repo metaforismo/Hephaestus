@@ -146,6 +146,14 @@ def _canonicalize_projection(
                     raise PostPhysicalEquivalenceError(
                         f"{context}.{backend}.{fault} legacy unproven count is invalid"
                     )
+                for field in (
+                    "negative_control_passed",
+                    "unproven_equivalence_detected",
+                ):
+                    if field in steady and steady[field] is not True:
+                        raise PostPhysicalEquivalenceError(
+                            f"{context}.{backend}.{fault} legacy count contradicts {field}"
+                        )
                 steady["negative_control_passed"] = True
                 steady["unproven_equivalence_detected"] = True
             if steady.get("negative_control_passed") is not True:

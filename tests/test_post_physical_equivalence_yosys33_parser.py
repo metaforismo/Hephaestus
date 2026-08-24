@@ -114,6 +114,16 @@ def test_negative_reference_rejects_zero_unproven_cells() -> None:
         )
 
 
+def test_negative_reference_rejects_contradictory_legacy_predicates() -> None:
+    projection = _negative_projection(1)
+    projection["backends"]["shared_dag"]["negative_controls"]["data"][
+        "steady_state_induction"
+    ]["negative_control_passed"] = False
+
+    with pytest.raises(ppe.PostPhysicalEquivalenceError, match="contradicts"):
+        _reference._canonicalize_projection(projection, context="contradictory")
+
+
 def test_projection_diagnostics_report_exact_nested_paths() -> None:
     differences = _reference._projection_differences(
         {"backend": {"attempts": [1, 2]}, "claim": True},

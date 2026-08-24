@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -159,6 +161,8 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -208,6 +212,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -343,6 +349,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -362,11 +370,11 @@ jobs:
           python -m pip install -e '.[dev]'
           ruff check \
             src/hephaestus/post_physical_equivalence \
-            tests/test_post_physical_equivalence.py
+            tests/test_post_physical_equivalence*.py
           ruff format --check \
             src/hephaestus/post_physical_equivalence \
-            tests/test_post_physical_equivalence.py
-          pytest tests/test_post_physical_equivalence.py
+            tests/test_post_physical_equivalence*.py
+          pytest tests/test_post_physical_equivalence*.py
           python -m hephaestus.post_physical_equivalence --help
 
       - name: Download the same-run matched physical evidence
@@ -385,7 +393,7 @@ jobs:
               benchmarks/reference/ihp_sg13g2_post_physical_equivalence_tiny_v1.json \
             --out build/post-physical/equivalence \
             --timeout 300 \
-            --source-revision '${{ github.sha }}'
+            --source-revision '${{ github.event.pull_request.head.sha || github.sha }}'
 
       - name: Validate the qualified claim boundary
         run: |
@@ -401,7 +409,9 @@ jobs:
           assert evidence['schema'] == (
               'hephaestus.post-physical-equivalence-evidence.v1'
           )
-          assert evidence['execution']['source_revision'] == '${{ github.sha }}'
+          assert evidence['execution']['source_revision'] == (
+              '${{ github.event.pull_request.head.sha || github.sha }}'
+          )
           assert set(evidence['backends']) == {
               'shared_dag',
               'naive_shift_add',
@@ -434,6 +444,15 @@ jobs:
               'silicon_verified': False,
           }
           PY
+
+      - name: Upload diagnostics after a failed qualification
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-post-physical-equivalence-failure-${{ github.run_attempt }}
+          path: build/post-physical/equivalence
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload the qualified post-physical equivalence evidence
         uses: actions/upload-artifact@v4

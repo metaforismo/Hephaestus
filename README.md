@@ -1,61 +1,197 @@
 # Hephaestus
 
-**An open model-to-metal research compiler for neural-network weights that become circuit
-topology.**
+**An open model-to-metal research compiler for neural-network weights that become circuit topology.**
 
-Hephaestus takes a constant two-dimensional tensor, quantizes it to signed powers of two, finds
-reusable partial sums, and emits synthesizable SystemVerilog. The generated direct-logic core has
-no weight array, weight address bus, codebook ROM, or runtime coefficient-fetch path. Coefficients
-exist as shifts, signs, wires, and shared addition nodes.
+Hephaestus takes a fixed two-dimensional tensor, quantizes it, factors repeated arithmetic, emits
+synthesizable SystemVerilog, and carries the resulting registered designs through formal proof and
+an open RTL-to-GDS flow. The current direct-logic core has no runtime coefficient array, address
+bus, codebook ROM, or weight-fetch path: coefficients exist as shifts, signs, wires, and additions.
 
-> **Implemented and tested:** JSON/NumPy/Safetensors tensor access, Hugging Face sharded-index
-> resolution, bounded tensor slicing, signed-power-of-two quantization, a serializable shared-adder
-> DAG, RTL emission, structural evidence, matched RTL backends, reproducible generic Yosys
-> evidence, bounded exhaustive Yosys-SAT equivalence, pinned IHP SG13G2 standard-cell mapping,
-> exhaustive SAT equivalence of mapped standard-cell netlists, technology-aware ABC area-delay
-> sweeps under versioned input-driver and output-load assumptions, exhaustive SAT proof of every
-> distinct netlist produced by that sweep, pinned OpenSTA pre-layout timing of the six formally
-> proved Pareto netlists with digest-level proof binding, and matched registered streaming wrappers
-> verified against an independent arithmetic oracle with bubbles, reset checks, and a negative
-> control.
->
-> **Not claimed:** a complete transformer compiler, unbounded sequential formal equivalence,
-> sign-off timing or power closure, competitive post-layout PPA, 40,000 tokens/s, a 7 nm tapeout,
-> extracted energy, or measured silicon.
-
-## Why this direction
-
-Conventional accelerators repeatedly move model parameters through a memory hierarchy. A fixed
-model creates a different design point: compile stable parameters into the implementation and move
-activations instead. Hephaestus explores a direct-logic branch of that space:
-
-```text
-checkpoint tensor or bounded tile
-              │
-              ▼
-power-of-two, sensitivity-aware quantization
-              │
-              ▼
-constant-matrix ZeroFetch IR
-              │
-              ▼
-global common-subexpression elimination
-              │
-              ▼
-shift / sign / shared-adder DAG
-              │
-              ▼
-SystemVerilog → Yosys → OpenROAD → GDS → DRC/LVS/PEX
-```
-
-The central invariant is deliberately narrow and testable:
+The central invariant is deliberately narrow:
 
 ```text
 runtime weight reads per compiled matrix-vector operation = 0
 ```
 
-Activations, accumulators, control state, KV cache, residuals, and model I/O still move. Zero weight
-fetch is not zero memory, zero physical representation, or an energy result.
+That does **not** mean zero memory, zero activation traffic, zero KV-cache traffic, zero state, zero
+wire cost, or automatically lower energy. It means only that the compiled matrix coefficients are
+not fetched at runtime.
+
+## Current evidence boundary
+
+Implemented and continuously checked:
+
+- safe JSON, NumPy, NPZ, Safetensors, and sharded Hugging Face tensor input;
+- bounded tensor slicing without unsafe pickle checkpoint loading;
+- signed-power-of-two quantization with exact power-of-two row scales;
+- serializable shared-adder DAG lowering and synthesizable flattened-port RTL;
+- matched `shared_dag`, `naive_shift_add`, and `constant_multipliers` backends;
+- generic Yosys synthesis, exhaustive bounded combinational SAT, and negative controls;
+- pinned IHP SG13G2 mapping, mapped-netlist formal equivalence, ABC area-delay, and OpenSTA;
+- identical registered streaming wrappers with latency one and initiation interval one;
+- three backends × two repeatable pinned OpenROAD Flow Scripts attempts;
+- exact routed GDS, DEF, Verilog, OpenDB, SPEF, manifests, and SHA-256 provenance;
+- same-run post-physical sequential equivalence for both routed attempts of every backend;
+- independent data, valid-latency, and reset negative controls for both proof obligations.
+
+Not claimed:
+
+- a complete transformer compiler;
+- universal superiority of hardwired weights;
+- four-state or timing-annotated routed equivalence;
+- arbitrary asynchronous-reset-event equivalence;
+- independent DRC or LVS cleanliness;
+- activity-qualified power or validated PEX;
+- foundry sign-off, 7 nm readiness, token/s claims, or measured silicon.
+
+See [Post-physical status](docs/POST_PHYSICAL_STATUS.md) for the authoritative claim matrix.
+
+## Why this direction
+
+A fixed model is not the same hardware-design problem as a fully programmable accelerator.
+Conventional accelerators repeatedly move parameters through a memory hierarchy. Hephaestus
+explores whether stable coefficients can instead become implementation topology:
+
+```text
+checkpoint tensor or bounded tile
+              ↓
+hardware-aware quantization
+              ↓
+constant-matrix IR
+              ↓
+signed shifts and signs
+              ↓
+shared partial-sum DAG
+              ↓
+registered SystemVerilog
+              ↓
+formal proof
+              ↓
+Yosys / OpenSTA / OpenROAD
+              ↓
+GDS / DEF / OpenDB / SPEF
+              ↓
+DRC / LVS / PEX / power / silicon, when independently qualified
+```
+
+The long-term question is not whether the project can draw a GDS file. It can. The question is
+whether joint numerical, logical, and physical compilation can produce an end-to-end advantage
+once routing, buffering, switching, model quality, variation, and update economics are included.
+
+## Qualified 4×6 routed microcase
+
+The current physical regression uses one common IHP SG13G2 contract for all three registered
+backends and runs each implementation twice. Both attempts per backend must agree under narrowly
+specified normalization rules, and both exact routed netlists are then proved against the exact
+registered source implementation.
+
+| Backend | Final instance area | Standard cells | Routed wire length | Vias | Observed fmax |
+|---|---:|---:|---:|---:|---:|
+| `shared_dag` | **16,180.8** | **1,211** | **27,281** | **6,575** | 297.951 MHz |
+| `naive_shift_add` | 17,418.2 | 1,335 | 29,638 | 7,445 | 291.568 MHz |
+| `constant_multipliers` | 17,530.7 | 1,351 | 32,425 | 7,537 | **320.953 MHz** |
+
+For this exact microcase and physical contract:
+
+- the shared DAG is the smallest and has the least routed wire and fewest vias;
+- it is slightly faster than naive shift/add;
+- the constant-multiplier source is faster than the shared DAG after routing;
+- therefore the physical result is **mixed**, not “the shared DAG wins everything.”
+
+Relative to naive shift/add, the shared DAG has approximately 7.10% less final instance area,
+9.29% fewer standard cells, 7.95% less routed wire, 11.69% fewer vias, and 2.19% higher observed
+fmax. Relative to constant multipliers, it has approximately 7.70% less area, 10.36% fewer cells,
+15.86% less wire, and 12.76% fewer vias, but approximately 7.17% lower observed fmax.
+
+These are routed observations for one 4×6 registered microcase. They are not model-level PPA,
+activity-qualified power, sign-off timing, or a universal architecture result. Internal routing DRC
+counts and tool-emitted power numbers remain observations until independent downstream evidence is
+qualified.
+
+See [Matched OpenROAD physical evidence](docs/OPENROAD_PHYSICAL_EVIDENCE.md) and
+[Post-physical equivalence](docs/POST_PHYSICAL_EQUIVALENCE.md).
+
+## Post-physical equivalence
+
+The permanent proof is compositional:
+
+```text
+independent arithmetic oracle
+  → exhaustively proved source core
+  → registered source implementation
+  → two routed attempts per backend
+  → five-cycle reset-synchronized bounded SAT base case
+  → steady-state temporal induction
+```
+
+For each of six routed attempts, the bounded proof starts from arbitrary defined state, asserts
+reset in cycle one, releases it for cycles two through five, and proves the observable equivalence
+points over the four cycles required by the induction premise. A separate flow then runs
+`equiv_struct`, `equiv_simple`, `equiv_induct -seq 4`, and `equiv_status -assert`.
+
+Every backend also has three fault classes:
+
+- data corruption;
+- an extra valid-latency register;
+- routed reset disconnection.
+
+Each fault must produce a bounded SAT counterexample and leave at least one unproven equivalence
+point in the induction flow. The exact number of unproven points is retained in raw evidence but is
+not treated as a stable solver invariant.
+
+A qualifying artifact may set:
+
+```text
+post_physical_equivalence_verified = true
+comparative_ppa_claim_enabled = true
+```
+
+only for the exact two-state, zero-delay, clock-edge 4×6 contract.
+
+## Earlier evidence ladder
+
+The routed result sits above several separately scoped layers.
+
+### Generic Yosys structure
+
+| Backend | Generic post-techmap cells |
+|---|---:|
+| Shared DAG | **823** |
+| Naive shift/add | 943 |
+| Constant multipliers | 955 |
+
+These are generic structural counts, not standard-cell PPA.
+
+### Pinned IHP mapped area
+
+| Backend | Cells | Liberty area units |
+|---|---:|---:|
+| Shared DAG | **492** | **5,350.6656** |
+| Naive shift/add | 574 | 6,285.0816 |
+| Constant multipliers | 574 | 6,248.7936 |
+
+The exact mapped netlists are separately proved against an independent arithmetic reference.
+Liberty area is not placed silicon area.
+
+### Pinned ABC area-delay observation
+
+| Backend | Cells | Liberty area | ABC delay |
+|---|---:|---:|---:|
+| Shared DAG | **497** | **5,439.5712** | **2,029.49 ps** |
+| Naive shift/add | 577 | 6,339.5136 | 2,183.17 ps |
+| Constant multipliers | 578 | 6,334.0704 | 2,270.49 ps |
+
+ABC delay is not sign-off STA.
+
+### Formally bound pre-layout OpenSTA observation
+
+| Backend | OpenSTA data delay | Worst slack under 4 ns reporting period |
+|---|---:|---:|
+| Shared DAG | **2.187032223 ns** | 1.812967777 ns |
+| Naive shift/add | 2.356311440 ns | 1.643688560 ns |
+| Constant multipliers | 2.390366912 ns | 1.609633088 ns |
+
+This layer has no routed parasitics and is intentionally distinct from the physical result above.
 
 ## Quick start
 
@@ -70,207 +206,86 @@ hephaestus compile examples/tiny_weights.json \
 ./scripts/check_rtl.sh build/tiny/hephaestus_tiny.sv hephaestus_tiny
 ```
 
-The output directory contains:
+The compiler emits:
 
 ```text
 build/tiny/
-├── hephaestus_tiny.sv       # fixed-topology RTL
-├── manifest.json            # source, quantization, topology, verification, claim stage
-├── plan.json                # serializable addition DAG
-├── codes.npy                # quantized integer coefficient oracle
-└── row_scale_exponents.npy  # exact 2^e output-scale metadata
+├── hephaestus_tiny.sv
+├── manifest.json
+├── plan.json
+├── codes.npy
+└── row_scale_exponents.npy
 ```
 
-## Hugging Face Safetensors
+## Safe model input
 
-Hephaestus never deserializes pickle checkpoints. It can inspect a direct Safetensors file, a
-Hugging Face `*.safetensors.index.json`, or a directory containing one unambiguous checkpoint:
-
-```bash
-hephaestus tensors /models/llama-checkpoint
-```
-
-A bounded tile can be compiled without materializing the other model shards or the rest of the
-selected tensor:
+Hephaestus never deserializes pickle checkpoints. It can inspect direct Safetensors, a Hugging Face
+`*.safetensors.index.json`, or an unambiguous checkpoint directory:
 
 ```bash
-hephaestus compile /models/llama-checkpoint \
+hephaestus tensors /models/checkpoint
+
+hephaestus compile /models/checkpoint \
   --tensor-key model.layers.0.mlp.up_proj.weight \
   --rows 0:128 \
   --columns 0:256 \
   --out build/layer0-up-tile
 ```
 
-The manifest records the original shape, selected ranges, actual shard, index digest when present,
-and a canonical digest of exactly the floating-point values consumed by the compiler. It does not
-hash an entire multi-gigabyte shard merely to compile a small tile.
+The manifest records the selected tensor shape and ranges, actual shard, descriptor provenance, and
+a canonical digest of exactly the floating-point values consumed by the compiler.
 
 ## Current numerical representation
 
-The first quantizer uses a codebook such as:
+The first quantizer uses a signed power-of-two/zero codebook such as:
 
 ```text
 {-4, -2, -1, 0, 1, 2, 4}
 ```
 
-Each output row receives an exactly representable power-of-two scale. The integer core computes the
-code matrix; the row exponents remain explicit metadata for later fixed-point scheduling. An
-optional one-dimensional activation-importance vector or full matrix can weight quantization error.
+Each row has an exactly representable power-of-two scale. An optional activation-importance vector
+or full matrix weights quantization error. The integer core computes the code matrix; row scale
+exponents remain explicit metadata for later fixed-point scheduling.
 
-The lowerer turns every nonzero code into one signed shift of an input, greedily shares repeated
-partial sums across outputs, and hash-conses the remaining balanced addition trees. A Python
-reference evaluator checks the serialized graph with arbitrary-precision integers, avoiding false
-success caused by NumPy `int64` overflow.
+## Research direction
 
-## First pinned mapped result
+The next architectural gains should come from numerical, logical, and physical co-design:
 
-For the bundled 4×6 integer microcase, the same IHP SG13G2 typical Liberty and Yosys/ABC flow maps
-the shared DAG to 492 cells and 5350.6656 Liberty area units. The matched naive shift/add backend
-maps to 574 cells and 6285.0816 units; the explicit constant-multiplier source maps to 574 cells and
-6248.7936 units.
+1. canonical signed digit and multiple-constant-multiplication rewrites;
+2. scalable CSE, algebraic factoring, retiming, and fanout-aware transformations;
+3. placement-, congestion-, wire-, and switching-aware graph cost functions;
+4. activation-calibrated quantization, mixed precision, sparsity, and outlier planes;
+5. a mostly fixed base with a small programmable residual plane;
+6. a closed loop from quantization to P&R measurements and back;
+7. larger tiles and model-quality evaluation only after the microcase evidence remains trustworthy;
+8. independent DRC, LVS, PEX, activity-based power, and eventually a small MPW test chip.
 
-A downstream proof loads functional Boolean models from the same pinned Liberty and symbolically
-proves all three mapped netlists against an independent reference derived directly from `codes.npy`.
-The proof covers every defined 48-bit input assignment and requires a synthetic output fault to
-produce a counterexample.
+Hephaestus is an independent research architecture. Public patents and papers are technical input,
+not a freedom-to-operate opinion. Proprietary PDKs, foundry collateral, and third-party checkpoints
+do not belong in this repository.
 
-This result is a reproducible standard-cell mapped-area estimate plus bounded mapped-netlist
-functional equivalence. It is not placed area, timing, power, or post-layout PPA. See
-[Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md) and
-[Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md) for the exact flows, digests,
-negative controls, and claim boundaries.
+## Documentation
 
-## First technology-aware area-delay result
-
-The same 4×6 matched backends were also mapped with the pinned IHP Liberty while declaring
-`sg13g2_buf_4` as the primary-input driving cell and 10 fF of load on each primary output. The value
-below is the achieved delay printed by ABC `stime -p`; it is not the requested `-D` target.
-
-| Backend | Cells | Liberty area | ABC delay |
-|---|---:|---:|---:|
-| Shared Hephaestus DAG | **497** | **5439.5712** | **2029.49 ps** |
-| Naive output-local shift/add | 577 | 6339.5136 | 2183.17 ps |
-| Explicit constant-multiplier source | 578 | 6334.0704 | 2270.49 ps |
-
-At this pre-layout point, the shared DAG reduces area-delay product by 20.2358% relative to naive
-shift/add and by 23.2375% relative to the explicit constant-multiplier source. The evidence also
-sweeps 1000, 2000, 4000, 8000, and 16000 ps targets, records whether each target is actually met,
-collapses duplicate coordinates, and retains the two observed Pareto points per backend.
-
-A separate downstream proof now verifies the Boolean semantics of every netlist produced by the
-sweep. The 18 labeled runs collapse to six distinct mapped-Verilog SHA-256 digests; all six are
-proved exhaustively over the defined 48-bit input space. A label can reuse a proof only when its
-mapped Verilog is byte-identical to the representative, and an injected output fault must still
-produce a counterexample.
-
-This is a technology-aware ABC estimate plus a separate functional-equivalence layer. It is not
-sign-off STA, SDC timing closure, placed or routed timing, parasitic extraction, or measured
-silicon. See [ABC area-delay evidence](docs/ABC_AREA_DELAY.md) and
-[ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md) for the assumptions, exact reports,
-proof grouping, negative control, regression references, and claim boundaries.
-
-## First formally bound OpenSTA result
-
-The six distinct Pareto netlists were then analyzed by OpenSTA built from pinned source commit
-`2b751f0e8196b05ef4ed8246b7e27c63c967ec6d`. Each timing result is accepted only when its
-mapped-Verilog SHA-256 digest matches a successful exhaustive SAT proof of the exact same netlist.
-
-The common pre-layout boundary contract uses a 4.0 ns virtual reporting period, zero input and
-output delay, `sg13g2_buf_4` input drivers, 0.01 pF of load per primary output, and no annotated
-parasitics.
-
-| Backend | ABC mapping | OpenSTA data delay | Worst slack |
-|---|---|---:|---:|
-| Shared Hephaestus DAG | `unconstrained` | **2.187032223 ns** | 1.812967777 ns |
-| Naive output-local shift/add | `unconstrained` | 2.356311440 ns | 1.643688560 ns |
-| Explicit constant-multiplier source | `unconstrained` | 2.390366912 ns | 1.609633088 ns |
-| Shared Hephaestus DAG | `d4000ps` | **2.240758538 ns** | 1.759241462 ns |
-| Naive output-local shift/add | `d4000ps` | 2.400178790 ns | 1.599821210 ns |
-| Explicit constant-multiplier source | `d4000ps` | 2.400267601 ns | 1.599732399 ns |
-
-For this exact microcase, the shared DAG is fastest at both observed Pareto mappings. At the
-`unconstrained` point it reduces OpenSTA data delay by 7.1841% versus naive shift/add and 8.5064%
-versus the constant-multiplier source. Every analysis is run twice with one captured OpenSTA binary
-and must produce byte-identical reports and identical normalized metrics.
-
-This is formally bound pre-layout timing evidence, not sign-off STA or physical timing closure. It
-has no placement, routing, extracted RC, power, DRC, LVS, PEX, or silicon claim. See
-[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md) for the pinned toolchain, six
-netlist digests, regression reference, artifact provenance, repeatability rule, and claim boundary.
-
-## First registered streaming tile result
-
-The same three matched integer cores now have identical synchronous wrappers with registered input
-and output buses, synchronous active-high reset, and a one-bit valid pipeline. A transaction
-accepted at edge `N` is returned at edge `N + 1`, while the interface can still accept one new
-transaction per cycle.
-
-For the bundled 4×6 case, the pinned registered regression executes:
-
-```text
-valid transactions:    272
-scheduled cycles:      311
-intentional bubbles:    39
-value latency:           1 cycle
-valid latency:           1 cycle
-initiation interval:     1 cycle
-runtime weight reads:    0 per mat-vec
-```
-
-The expected outputs are generated directly from `codes.npy` by a Python arithmetic oracle. The
-schedule combines consecutive valid transactions, bubbles, signed extrema, deterministic corner
-cases, and seeded random inputs. All three wrappers match the oracle. Reset clears both output and
-valid state, and a data-dependent fault injected into only the shared-DAG wrapper is detected by a
-separate negative-control simulation.
-
-The qualifying evidence artifact has SHA-256
-`2527c95a904598d10526b1740b1110db788ccf2fffeb7674e03eca0456834e8a`. The regression reference
-pins the source-core, wrapper, reference, oracle, and testbench digests rather than accepting a
-result by backend name alone.
-
-This is registered streaming simulation bound to exhaustively proved combinational source cores.
-It is not unbounded sequential formal proof, frequency closure, mapped sequential PPA, placement,
-routing, extracted RC, activity-based power, DRC/LVS/PEX, or silicon evidence. See
-[Registered matched tiles](docs/REGISTERED_TILES.md) for the interface, oracle, artifact bundle,
-negative control, regression reference, reproduction commands, and claim boundary.
-
-## Research thesis
-
-Hephaestus should not be a clone of a mask-ROM accelerator. The strongest route is numerical,
-logical, and physical co-design:
-
-1. **Quantize for physical cost, not only model error.** Optimize quality together with adder
-   count, depth, fanout, congestion, wire length, and switching.
-2. **Synthesize the constant matrix directly.** Explore signed-digit recoding, shared sums,
-   structured sparsity, low-rank or transform factorization, and placement-aware tile partitioning.
-3. **Retain a small programmable residual plane.** Keep outliers, adapters, calibration values,
-   and model patches configurable while the dominant base is fixed.
-4. **Close the physical feedback loop.** Feed synthesis and place-and-route evidence back into
-   quantization and graph rewriting. A smaller mathematical graph can lose after buffering.
-5. **Use accessible process evidence first.** Establish equivalence, PPA, DRC/LVS, and PEX on an
-   open or accessible node before making advanced-node product claims.
-
-See [Strategy](docs/STRATEGY.md), [Architecture](docs/ARCHITECTURE.md),
-[Roadmap](docs/ROADMAP.md), [Benchmarking](docs/BENCHMARKING.md),
-[Structural evidence](docs/EVIDENCE.md), [Matched RTL baselines](docs/MATCHED_BASELINES.md),
-[Generic Yosys evidence](docs/SYNTHESIS_EVIDENCE.md),
-[Formal equivalence](docs/FORMAL_EQUIVALENCE.md),
-[Pinned IHP mapped synthesis](docs/MAPPED_SYNTHESIS.md),
-[Mapped standard-cell equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md),
-[ABC area-delay evidence](docs/ABC_AREA_DELAY.md),
-[ABC sweep mapped equivalence](docs/ABC_AREA_DELAY_FORMAL.md),
-[Formally bound OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md),
-[Registered matched tiles](docs/REGISTERED_TILES.md),
-[Patent landscape](docs/IP_LANDSCAPE.md), [Foundry path](docs/FOUNDRY_PATH.md), and
-[Research plan](docs/RESEARCH.md).
+- [Architecture](docs/ARCHITECTURE.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Matched baselines](docs/MATCHED_BASELINES.md)
+- [Mapped synthesis](docs/MAPPED_SYNTHESIS.md)
+- [Mapped formal equivalence](docs/MAPPED_FORMAL_EQUIVALENCE.md)
+- [ABC area-delay](docs/ABC_AREA_DELAY.md)
+- [OpenSTA timing](docs/OPENSTA_TIMING_EVIDENCE.md)
+- [Registered tiles](docs/REGISTERED_TILES.md)
+- [OpenROAD physical evidence](docs/OPENROAD_PHYSICAL_EVIDENCE.md)
+- [Post-physical equivalence](docs/POST_PHYSICAL_EQUIVALENCE.md)
+- [Post-physical status](docs/POST_PHYSICAL_STATUS.md)
+- [Patent landscape](docs/IP_LANDSCAPE.md)
+- [Foundry path](docs/FOUNDRY_PATH.md)
 
 ## Project status
 
-Hephaestus is pre-alpha research software. Generated RTL has not been fabricated. Patent notes are
-technical reading, not a freedom-to-operate opinion. Commercial work requires qualified digital,
-physical-design, verification, DFT, package, safety, security, and patent specialists.
+Hephaestus is pre-alpha research software. No generated design has been fabricated. Commercial work
+requires qualified verification, physical-design, DFT, package, reliability, security, and patent
+specialists.
 
 ## License
 
-Apache-2.0. Proprietary PDKs, standard-cell libraries, foundry collateral, and third-party model
-checkpoints are not part of this repository.
+Apache-2.0.
