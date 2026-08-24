@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hephaestus.post_physical_equivalence import _proof
+import pytest
+
+import hephaestus.post_physical_equivalence as ppe
+from hephaestus.post_physical_equivalence import _proof, _reference
 
 
 def _fake_yosys(tmp_path: Path, *, include_sat_banner: bool) -> Path:
@@ -61,3 +64,44 @@ def test_bounded_parser_rejects_a_success_marker_without_a_sat_pass(
     assert result["sat_pass_started"] is False
     assert result["equiv_cells_total"] == 49
     assert result["proof_success"] is True
+
+
+def test_projection_diagnostics_report_exact_nested_paths() -> None:
+    differences = _reference._projection_differences(
+        {"backend": {"attempts": [1, 2]}, "claim": True},
+        {"backend": {"attempts": [1, 3, 4]}},
+    )
+
+    assert differences == [
+        "$.backend.attempts.length: expected=2, actual=3",
+        "$.backend.attempts[1]: expected=2, actual=3",
+        "$.backend.attempts[2]: expected=<missing>, actual=4",
+        "$.claim: expected=true, actual=<missing>",
+    ]
+
+
+def test_public_builder_rejects_an_output_ancestor_of_inputs(tmp_path: Path) -> None:
+    with pytest.raises(ppe.PostPhysicalEquivalenceError, match="overlaps"):
+        ppe.build_evidence(
+            tmp_path / "physical",
+            tmp_path / "models.v",
+            tmp_path / "reference.json",
+            tmp_path,
+        )
+
+
+def test_public_builder_preserves_an_existing_unrelated_output(tmp_path: Path) -> None:
+    output = tmp_path / "existing-output"
+    output.mkdir()
+    sentinel = output / "keep.txt"
+    sentinel.write_text("do not delete\n", encoding="utf-8")
+
+    with pytest.raises(ppe.PostPhysicalEquivalenceError, match="already exists"):
+        ppe.build_evidence(
+            tmp_path / "physical",
+            tmp_path / "models.v",
+            tmp_path / "reference.json",
+            output,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "do not delete\n"
