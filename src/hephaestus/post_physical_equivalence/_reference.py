@@ -119,9 +119,7 @@ def _projection_differences(
     if isinstance(expected, list) and isinstance(actual, list):
         differences = []
         if len(expected) != len(actual):
-            differences.append(
-                f"{path}.length: expected={len(expected)}, actual={len(actual)}"
-            )
+            differences.append(f"{path}.length: expected={len(expected)}, actual={len(actual)}")
         for index in range(max(len(expected), len(actual))):
             expected_item = expected[index] if index < len(expected) else _MISSING
             actual_item = actual[index] if index < len(actual) else _MISSING
