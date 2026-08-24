@@ -18,6 +18,8 @@ from ._common import (
     _sha256_text,
 )
 
+_MISSING = object()
+
 
 def _load_reference(path: Path) -> dict[str, Any]:
     reference = _load_json(path)
@@ -91,14 +93,71 @@ def _stable_projection(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _render_difference_value(value: object) -> str:
+    if value is _MISSING:
+        return "<missing>"
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
+def _projection_differences(
+    expected: object,
+    actual: object,
+    *,
+    path: str = "$",
+) -> list[str]:
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        differences: list[str] = []
+        for key in sorted(set(expected) | set(actual)):
+            differences.extend(
+                _projection_differences(
+                    expected.get(key, _MISSING),
+                    actual.get(key, _MISSING),
+                    path=f"{path}.{key}",
+                )
+            )
+        return differences
+    if isinstance(expected, list) and isinstance(actual, list):
+        differences = []
+        if len(expected) != len(actual):
+            differences.append(
+                f"{path}.length: expected={len(expected)}, actual={len(actual)}"
+            )
+        for index in range(max(len(expected), len(actual))):
+            expected_item = expected[index] if index < len(expected) else _MISSING
+            actual_item = actual[index] if index < len(actual) else _MISSING
+            differences.extend(
+                _projection_differences(
+                    expected_item,
+                    actual_item,
+                    path=f"{path}[{index}]",
+                )
+            )
+        return differences
+    if expected == actual:
+        return []
+    return [
+        f"{path}: expected={_render_difference_value(expected)}, "
+        f"actual={_render_difference_value(actual)}"
+    ]
+
+
 def _validate_reference(evidence: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
     expected = reference.get("stable_projection")
     if not isinstance(expected, dict):
         raise PostPhysicalEquivalenceError("post-physical reference projection is malformed")
     actual = _stable_projection(evidence)
     if actual != expected:
+        differences = _projection_differences(expected, actual)
+        expected_json = json.dumps(expected, separators=(",", ":"), sort_keys=True)
+        actual_json = json.dumps(actual, separators=(",", ":"), sort_keys=True)
+        preview = "\n".join(differences[:40])
+        suffix = "" if len(differences) <= 40 else f"\n... {len(differences) - 40} more"
         raise PostPhysicalEquivalenceError(
-            "post-physical stable projection differs from the pinned regression reference"
+            "post-physical stable projection differs from the pinned regression reference: "
+            f"{len(differences)} field(s); "
+            f"expected_sha256={_sha256_text(expected_json)}, "
+            f"actual_sha256={_sha256_text(actual_json)}\n"
+            f"{preview}{suffix}"
         )
     return {
         "reference_id": _REFERENCE_ID,
