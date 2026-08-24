@@ -42,3 +42,49 @@ def test_resolve_under_rejects_parent_traversal_before_resolution(tmp_path: Path
 
     with pytest.raises(ppe.PostPhysicalEquivalenceError, match="parent traversal"):
         _common._resolve_under(root, "../outside.v", context="escape")
+
+
+def test_public_builder_rejects_symlinked_models_before_reading_inputs(
+    tmp_path: Path,
+) -> None:
+    models = tmp_path / "models.v"
+    models.write_text("module model; endmodule\n", encoding="utf-8")
+    models_link = tmp_path / "models-link.v"
+    models_link.symlink_to(models.name)
+    reference = tmp_path / "reference.json"
+    reference.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(
+        ppe.PostPhysicalEquivalenceError,
+        match="functional cell models path must not contain symlinks",
+    ):
+        ppe.build_evidence(
+            tmp_path / "physical",
+            models_link,
+            reference,
+            tmp_path / "output",
+        )
+
+
+def test_public_builder_rejects_a_symlinked_output(tmp_path: Path) -> None:
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    models = tmp_path / "models.v"
+    models.write_text("module model; endmodule\n", encoding="utf-8")
+    reference = tmp_path / "reference.json"
+    reference.write_text("{}\n", encoding="utf-8")
+    real_output = tmp_path / "real-output"
+    real_output.mkdir()
+    output_link = tmp_path / "output-link"
+    output_link.symlink_to(real_output.name, target_is_directory=True)
+
+    with pytest.raises(
+        ppe.PostPhysicalEquivalenceError,
+        match="output directory path must not contain symlinks",
+    ):
+        ppe.build_evidence(
+            physical,
+            models,
+            reference,
+            output_link,
+        )
