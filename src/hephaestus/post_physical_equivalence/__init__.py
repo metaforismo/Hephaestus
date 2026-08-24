@@ -19,6 +19,16 @@ def _paths_overlap(lhs: Path, rhs: Path) -> bool:
     return lhs == rhs or lhs in rhs.parents or rhs in lhs.parents
 
 
+def _resolve_without_symlinks(value: Path, *, context: str) -> Path:
+    absolute = Path(value).absolute()
+    for candidate in (absolute, *absolute.parents):
+        if candidate.is_symlink():
+            raise PostPhysicalEquivalenceError(
+                f"{context} path must not contain symlinks: {absolute}"
+            )
+    return absolute.resolve()
+
+
 def build_evidence(
     physical_root: Path,
     models_path: Path,
@@ -31,10 +41,10 @@ def build_evidence(
 ) -> dict[str, Any]:
     """Build evidence without deleting or overwriting caller-owned paths."""
 
-    root = Path(physical_root).resolve()
-    models = Path(models_path).resolve()
-    reference = Path(reference_path).resolve()
-    output = Path(output_dir).resolve()
+    root = _resolve_without_symlinks(Path(physical_root), context="physical artifact")
+    models = _resolve_without_symlinks(Path(models_path), context="functional cell models")
+    reference = _resolve_without_symlinks(Path(reference_path), context="regression reference")
+    output = _resolve_without_symlinks(Path(output_dir), context="output directory")
     protected = {
         "physical artifact": root,
         "functional cell models": models,
