@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,23 @@ def _load_reference(path: Path) -> dict[str, Any]:
     if reference.get("reference_id") != _REFERENCE_ID:
         raise PostPhysicalEquivalenceError("unexpected post-physical reference identity")
     return reference
+
+
+def _negative_induction_projection(value: Any, *, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PostPhysicalEquivalenceError(f"{context} result is malformed")
+    count = value.get("negative_unproven_cells")
+    if type(count) is not int or count <= 0:
+        raise PostPhysicalEquivalenceError(
+            f"{context} must record at least one unproven equivalence cell"
+        )
+    if value.get("passed") is not True:
+        raise PostPhysicalEquivalenceError(f"{context} did not pass its negative-control gate")
+    return {
+        "negative_control_passed": True,
+        "script_sha256": value["script_sha256"],
+        "unproven_equivalence_detected": True,
+    }
 
 
 def _stable_projection(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -71,14 +89,10 @@ def _stable_projection(evidence: dict[str, Any]) -> dict[str, Any]:
                             "reset_synchronized_base_case"
                         ]["counterexample_found"],
                     },
-                    "steady_state_induction": {
-                        "script_sha256": value["negative_controls"][fault][
-                            "steady_state_induction"
-                        ]["script_sha256"],
-                        "negative_unproven_cells": value["negative_controls"][fault][
-                            "steady_state_induction"
-                        ]["negative_unproven_cells"],
-                    },
+                    "steady_state_induction": _negative_induction_projection(
+                        value["negative_controls"][fault]["steady_state_induction"],
+                        context=f"{backend}.{fault}.steady_state_induction",
+                    ),
                 }
                 for fault in _FAULTS
             },
@@ -91,6 +105,58 @@ def _stable_projection(evidence: dict[str, Any]) -> dict[str, Any]:
         "backends": backends,
         "claims": evidence["claims"],
     }
+
+
+def _canonicalize_projection(
+    projection: dict[str, Any],
+    *,
+    context: str,
+) -> dict[str, Any]:
+    """Normalize legacy exact counts into the stable negative-control predicate."""
+
+    canonical = copy.deepcopy(projection)
+    backends = canonical.get("backends")
+    if not isinstance(backends, dict) or set(backends) != set(_BACKENDS):
+        raise PostPhysicalEquivalenceError(f"{context} backend projection is malformed")
+    for backend in _BACKENDS:
+        backend_value = backends[backend]
+        if not isinstance(backend_value, dict):
+            raise PostPhysicalEquivalenceError(
+                f"{context}.{backend} backend projection is malformed"
+            )
+        controls = backend_value.get("negative_controls")
+        if not isinstance(controls, dict) or set(controls) != set(_FAULTS):
+            raise PostPhysicalEquivalenceError(
+                f"{context}.{backend} negative-control projection is malformed"
+            )
+        for fault in _FAULTS:
+            control = controls[fault]
+            if not isinstance(control, dict):
+                raise PostPhysicalEquivalenceError(
+                    f"{context}.{backend}.{fault} control projection is malformed"
+                )
+            steady = control.get("steady_state_induction")
+            if not isinstance(steady, dict):
+                raise PostPhysicalEquivalenceError(
+                    f"{context}.{backend}.{fault} induction projection is malformed"
+                )
+            legacy_count = steady.pop("negative_unproven_cells", None)
+            if legacy_count is not None:
+                if type(legacy_count) is not int or legacy_count <= 0:
+                    raise PostPhysicalEquivalenceError(
+                        f"{context}.{backend}.{fault} legacy unproven count is invalid"
+                    )
+                steady["negative_control_passed"] = True
+                steady["unproven_equivalence_detected"] = True
+            if steady.get("negative_control_passed") is not True:
+                raise PostPhysicalEquivalenceError(
+                    f"{context}.{backend}.{fault} negative control is not qualified"
+                )
+            if steady.get("unproven_equivalence_detected") is not True:
+                raise PostPhysicalEquivalenceError(
+                    f"{context}.{backend}.{fault} did not preserve an unproven point"
+                )
+    return canonical
 
 
 def _render_difference_value(value: object) -> str:
@@ -140,10 +206,11 @@ def _projection_differences(
 
 
 def _validate_reference(evidence: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
-    expected = reference.get("stable_projection")
-    if not isinstance(expected, dict):
+    expected_value = reference.get("stable_projection")
+    if not isinstance(expected_value, dict):
         raise PostPhysicalEquivalenceError("post-physical reference projection is malformed")
-    actual = _stable_projection(evidence)
+    expected = _canonicalize_projection(expected_value, context="reference")
+    actual = _canonicalize_projection(_stable_projection(evidence), context="evidence")
     if actual != expected:
         differences = _projection_differences(expected, actual)
         expected_json = json.dumps(expected, separators=(",", ":"), sort_keys=True)
