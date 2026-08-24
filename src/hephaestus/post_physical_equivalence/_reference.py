@@ -36,44 +36,28 @@ def _stable_projection(evidence: dict[str, Any]) -> dict[str, Any]:
         backends[backend] = {
             "source_core_sha256": value["source_core"]["sha256"],
             "source_wrapper_sha256": value["source_wrapper"]["sha256"],
-            "routed_verilog_sha256": [
-                item["routed_verilog"]["sha256"] for item in attempts
-            ],
+            "routed_verilog_sha256": [item["routed_verilog"]["sha256"] for item in attempts],
             "gate_wrapper_sha256": [item["gate_wrapper_sha256"] for item in attempts],
             "reset_synchronized_base_case": [
                 {
-                    "script_sha256": item["reset_synchronized_base_case"][
-                        "script_sha256"
-                    ],
-                    "equiv_cells_total": item["reset_synchronized_base_case"][
-                        "equiv_cells_total"
-                    ],
-                    "proof_success": item["reset_synchronized_base_case"][
-                        "proof_success"
-                    ],
+                    "script_sha256": item["reset_synchronized_base_case"]["script_sha256"],
+                    "equiv_cells_total": item["reset_synchronized_base_case"]["equiv_cells_total"],
+                    "proof_success": item["reset_synchronized_base_case"]["proof_success"],
                 }
                 for item in attempts
             ],
             "steady_state_induction": [
                 {
                     "script_sha256": item["steady_state_induction"]["script_sha256"],
-                    "equiv_cells_total": item["steady_state_induction"][
-                        "equiv_cells_total"
-                    ],
-                    "equiv_cells_proven": item["steady_state_induction"][
-                        "equiv_cells_proven"
-                    ],
-                    "equiv_cells_unproven": item["steady_state_induction"][
-                        "equiv_cells_unproven"
-                    ],
+                    "equiv_cells_total": item["steady_state_induction"]["equiv_cells_total"],
+                    "equiv_cells_proven": item["steady_state_induction"]["equiv_cells_proven"],
+                    "equiv_cells_unproven": item["steady_state_induction"]["equiv_cells_unproven"],
                 }
                 for item in attempts
             ],
             "negative_controls": {
                 fault: {
-                    "wrapper_sha256": value["negative_controls"][fault][
-                        "wrapper_sha256"
-                    ],
+                    "wrapper_sha256": value["negative_controls"][fault]["wrapper_sha256"],
                     "reset_synchronized_base_case": {
                         "script_sha256": value["negative_controls"][fault][
                             "reset_synchronized_base_case"
