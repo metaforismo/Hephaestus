@@ -90,19 +90,36 @@ def _safe_module(value: Any, *, context: str) -> str:
     return value
 
 
+def _reject_symlink_components(root: Path, candidate: Path, *, context: str) -> None:
+    current = candidate
+    while current != root:
+        if current.is_symlink():
+            raise PostPhysicalEquivalenceError(
+                f"{context} path must not contain symlinks: {candidate}"
+            )
+        parent = current.parent
+        if parent == current:
+            raise PostPhysicalEquivalenceError(f"{context} path has no bounded parent")
+        current = parent
+
+
 def _resolve_under(root: Path, relative: Any, *, context: str) -> Path:
     if not isinstance(relative, str) or not relative:
         raise PostPhysicalEquivalenceError(f"{context} path must be a non-empty string")
     raw = Path(relative)
     if raw.is_absolute():
         raise PostPhysicalEquivalenceError(f"{context} path must be relative")
+    if ".." in raw.parts:
+        raise PostPhysicalEquivalenceError(f"{context} path must not contain parent traversal")
     resolved_root = root.resolve()
-    resolved = (resolved_root / raw).resolve()
+    candidate = resolved_root / raw
+    _reject_symlink_components(resolved_root, candidate, context=context)
+    resolved = candidate.resolve()
     try:
         resolved.relative_to(resolved_root)
     except ValueError as exc:
         raise PostPhysicalEquivalenceError(f"{context} path escapes its artifact root") from exc
-    if resolved.is_symlink() or not resolved.is_file() or resolved.stat().st_size == 0:
+    if not resolved.is_file() or resolved.stat().st_size == 0:
         raise PostPhysicalEquivalenceError(f"{context} is not a non-empty regular file: {resolved}")
     return resolved
 
