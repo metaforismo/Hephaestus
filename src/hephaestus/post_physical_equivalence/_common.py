@@ -110,7 +110,9 @@ def _resolve_under(root: Path, relative: Any, *, context: str) -> Path:
     if raw.is_absolute():
         raise PostPhysicalEquivalenceError(f"{context} path must be relative")
     if ".." in raw.parts:
-        raise PostPhysicalEquivalenceError(f"{context} path must not contain parent traversal")
+        raise PostPhysicalEquivalenceError(
+            f"{context} path escapes its artifact root via parent traversal"
+        )
     resolved_root = root.resolve()
     candidate = resolved_root / raw
     _reject_symlink_components(resolved_root, candidate, context=context)
