@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -266,6 +267,24 @@ def _write_logs(
     return stdout_path, stderr_path
 
 
+def _print_failure_diagnostics(
+    *,
+    label: str,
+    returncode: int | None,
+    timed_out: bool,
+    stdout: str,
+    stderr: str,
+) -> None:
+    print(
+        f"{label} failed: returncode={returncode}, timed_out={timed_out}",
+        file=sys.stderr,
+    )
+    print(f"--- {label} stdout tail ---", file=sys.stderr)
+    print("\n".join(stdout.splitlines()[-160:]), file=sys.stderr)
+    print(f"--- {label} stderr tail ---", file=sys.stderr)
+    print("\n".join(stderr.splitlines()[-160:]), file=sys.stderr)
+
+
 def _run_bounded_yosys(
     executable: str,
     workdir: Path,
@@ -306,6 +325,14 @@ def _run_bounded_yosys(
             and nonvacuous
             and proof_success
             and not counterexample
+        )
+    if not passed:
+        _print_failure_diagnostics(
+            label="bounded reset proof",
+            returncode=process.returncode,
+            timed_out=timed_out,
+            stdout=stdout,
+            stderr=stderr,
         )
     return {
         "passed": passed,
@@ -370,6 +397,14 @@ def _run_yosys(
         and negative_unproven > 0
     )
     passed = positive_passed if expect_equivalent else negative_detected
+    if not passed:
+        _print_failure_diagnostics(
+            label="steady-state induction proof",
+            returncode=process.returncode,
+            timed_out=timed_out,
+            stdout=stdout,
+            stderr=stderr,
+        )
     return {
         "passed": passed,
         "expected_equivalent": expect_equivalent,
