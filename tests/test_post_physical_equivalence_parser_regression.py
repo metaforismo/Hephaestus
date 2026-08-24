@@ -9,9 +9,7 @@ def test_bounded_parser_accepts_nonvacuous_miter_without_status_summary(
     tmp_path: Path,
 ) -> None:
     executable = tmp_path / "fake-yosys"
-    seeds = "\n".join(
-        f"Seed $equiv cell: cell_{index}" for index in range(49)
-    )
+    seeds = "\n".join(f"Seed $equiv cell: cell_{index}" for index in range(49))
     executable.write_text(
         "#!/bin/sh\n"
         "cat <<'EOF'\n"
