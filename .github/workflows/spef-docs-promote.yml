@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/spef-semantic-evidence
+  pull_request:
 
 permissions:
   contents: write
