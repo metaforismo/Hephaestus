@@ -1,0 +1,221 @@
+name: Routed SPEF semantic evidence
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install, lint, and test the SPEF evidence builder
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/spef_semantic \
+            tests/test_spef_semantic*.py
+          ruff format --check \
+            src/hephaestus/spef_semantic \
+            tests/test_spef_semantic*.py
+          pytest tests/test_spef_semantic*.py
+          python -m hephaestus.spef_semantic --help
+
+  qualify:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Hephaestus
+        run: python -m pip install -e .
+
+      - name: Locate the successful exact-head physical workflow run
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_EVENT: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 480); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/openroad-physical-evidence.yml/runs" \
+              -f event="$UPSTREAM_EVENT" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if [ -z "$run_id" ]; then
+              sleep 30
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if [ "$status" = completed ]; then
+              if [ "$conclusion" != success ]; then
+                echo "Exact-head upstream workflow ended with: $conclusion" >&2
+                echo "Upstream run: $html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              echo "Qualified upstream run: $html_url"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "No successful exact-head physical workflow completed within the gate." >&2
+          exit 1
+
+      - name: Download both artifacts from the same upstream workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-openroad-physical-evidence \
+            --dir build/spef-semantic/physical
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-post-physical-equivalence-evidence \
+            --dir build/spef-semantic/post-physical
+
+      - name: Build the routed SPEF semantic evidence
+        env:
+          HEPHAESTUS_UPSTREAM_PHYSICAL_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python -m hephaestus.spef_semantic \
+            build/spef-semantic/physical \
+            build/spef-semantic/post-physical \
+            --reference \
+              benchmarks/reference/ihp_sg13g2_spef_semantic_tiny_v1.json \
+            --out build/spef-semantic/evidence \
+            --source-revision "$TARGET_SHA"
+
+      - name: Validate the exact qualified claim boundary
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(
+              'build/spef-semantic/evidence/spef_semantic_evidence.json'
+          )
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.spef-semantic-evidence.v1'
+          assert evidence['evidence_level'] == (
+              'bound_routed_spef_semantic_repeatability'
+          )
+          assert evidence['execution']['source_revision'] == os.environ['TARGET_SHA']
+          assert evidence['execution']['upstream_physical_workflow_run_id'] == (
+              os.environ['UPSTREAM_RUN_ID']
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          assert all(
+              backend['passed']
+              and len(backend['attempts']) == 2
+              and set(backend['negative_controls'])
+              == {'declared_capacitance', 'resistance', 'unit'}
+              and all(
+                  control['detected']
+                  for control in backend['negative_controls'].values()
+              )
+              for backend in evidence['backends'].values()
+          )
+          assert sum(
+              len(backend['attempts'])
+              for backend in evidence['backends'].values()
+          ) == 6
+          assert sum(
+              len(backend['negative_controls'])
+              for backend in evidence['backends'].values()
+          ) == 9
+          assert evidence['regression']['passed'] is True
+          assert evidence['regression']['stable_projection_sha256'] == (
+              'eee20bb7bea188baee22335d4df6ab2844e54e83c72b8bd43b25443642d07ca6'
+          )
+          assert evidence['source']['regression_reference_sha256'] == (
+              '1ccca3e1f18c31d8ce73bed667eef29088782b15f4c2b91dbdc2136853f755b4'
+          )
+          assert evidence['claims'] == {
+              'physical_spef_binding_verified': True,
+              'post_physical_equivalence_prerequisite_verified': True,
+              'all_six_spef_files_parsed': True,
+              'spef_units_and_structure_validated': True,
+              'spef_declared_capacitance_consistency_verified': True,
+              'spef_semantic_repeatability_verified': True,
+              'spef_negative_controls_detected': True,
+              'fresh_parasitic_extraction_performed': False,
+              'independent_pex_crosscheck_verified': False,
+              'post_layout_pex_verified': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          PY
+
+      - name: Upload diagnostics after a failed qualification
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-spef-semantic-failure-${{ github.run_attempt }}
+          path: build/spef-semantic
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the qualified routed SPEF semantic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-spef-semantic-evidence
+          path: build/spef-semantic/evidence
+          if-no-files-found: error
+          retention-days: 30
