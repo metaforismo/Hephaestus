@@ -1,0 +1,188 @@
+{
+  "reference_id": "ihp-sg13g2-spef-semantic-tiny-v1",
+  "schema": "hephaestus.spef-semantic-reference.v1",
+  "stable_projection": {
+    "backends": {
+      "constant_multipliers": {
+        "attempt_count": 2,
+        "canonical_sha256": "e492d0a7707fdaee7e5b74e66e46d987ff43931d756eed109805cb7f5ede933a",
+        "delimiters": {
+          "bus_delimiter": "[]",
+          "delimiter": ":",
+          "divider": "/"
+        },
+        "design": "hephaestus_registered_tile_constant_multipliers_registered",
+        "design_flow": [
+          "NAME_SCOPE LOCAL",
+          "PIN_CAP NONE"
+        ],
+        "metrics": {
+          "connection_count": 4273,
+          "coupling_capacitance_count": 16378,
+          "ground_capacitance_count": 6743,
+          "max_declared_capacitance_error_pf": "0.0000000588",
+          "name_map_entry_count": 5245,
+          "net_count": 1402,
+          "node_count": 6743,
+          "port_count": 100,
+          "resistance_count": 5341,
+          "total_coupling_capacitance_pf": "1.43553042724",
+          "total_declared_capacitance_pf": "4.5813538824",
+          "total_ground_capacitance_pf": "3.14582323973",
+          "total_resistance_ohm": "165656.1936"
+        },
+        "negative_controls": {
+          "declared_capacitance": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          },
+          "resistance": {
+            "detected": true,
+            "mechanism": "canonical_digest_drift"
+          },
+          "unit": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          }
+        },
+        "spef_standard": "ieee 1481-1999",
+        "unit_contract": {
+          "capacitance_pf_per_unit": "1",
+          "inductance_henry_per_unit": "1",
+          "resistance_ohm_per_unit": "1",
+          "time_ns_per_unit": "1"
+        }
+      },
+      "naive_shift_add": {
+        "attempt_count": 2,
+        "canonical_sha256": "8f495d7f7c26470878abbb67e963e464e087e5ebab1680708a1fb12fe31c3fb6",
+        "delimiters": {
+          "bus_delimiter": "[]",
+          "delimiter": ":",
+          "divider": "/"
+        },
+        "design": "hephaestus_registered_tile_naive_shift_add_registered",
+        "design_flow": [
+          "NAME_SCOPE LOCAL",
+          "PIN_CAP NONE"
+        ],
+        "metrics": {
+          "connection_count": 4222,
+          "coupling_capacitance_count": 15590,
+          "ground_capacitance_count": 6638,
+          "max_declared_capacitance_error_pf": "0.0000000578",
+          "name_map_entry_count": 5195,
+          "net_count": 1386,
+          "node_count": 6638,
+          "port_count": 100,
+          "resistance_count": 5252,
+          "total_coupling_capacitance_pf": "1.19437194518",
+          "total_declared_capacitance_pf": "4.0755655916",
+          "total_ground_capacitance_pf": "2.88119317009",
+          "total_resistance_ohm": "162585.9118"
+        },
+        "negative_controls": {
+          "declared_capacitance": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          },
+          "resistance": {
+            "detected": true,
+            "mechanism": "canonical_digest_drift"
+          },
+          "unit": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          }
+        },
+        "spef_standard": "ieee 1481-1999",
+        "unit_contract": {
+          "capacitance_pf_per_unit": "1",
+          "inductance_henry_per_unit": "1",
+          "resistance_ohm_per_unit": "1",
+          "time_ns_per_unit": "1"
+        }
+      },
+      "shared_dag": {
+        "attempt_count": 2,
+        "canonical_sha256": "8a13050e8a01a67aafdd15e948bd46047ba08dfc01d51d5d9e62460a89898fe7",
+        "delimiters": {
+          "bus_delimiter": "[]",
+          "delimiter": ":",
+          "divider": "/"
+        },
+        "design": "hephaestus_registered_tile_shared_dag_registered",
+        "design_flow": [
+          "NAME_SCOPE LOCAL",
+          "PIN_CAP NONE"
+        ],
+        "metrics": {
+          "connection_count": 3820,
+          "coupling_capacitance_count": 13502,
+          "ground_capacitance_count": 5959,
+          "max_declared_capacitance_error_pf": "0.0000000545",
+          "name_map_entry_count": 5003,
+          "net_count": 1262,
+          "node_count": 5959,
+          "port_count": 100,
+          "resistance_count": 4697,
+          "total_coupling_capacitance_pf": "1.07912625674",
+          "total_declared_capacitance_pf": "3.703339197",
+          "total_ground_capacitance_pf": "2.62421295139",
+          "total_resistance_ohm": "144063.8678"
+        },
+        "negative_controls": {
+          "declared_capacitance": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          },
+          "resistance": {
+            "detected": true,
+            "mechanism": "canonical_digest_drift"
+          },
+          "unit": {
+            "detected": true,
+            "mechanism": "parser_rejection"
+          }
+        },
+        "spef_standard": "ieee 1481-1999",
+        "unit_contract": {
+          "capacitance_pf_per_unit": "1",
+          "inductance_henry_per_unit": "1",
+          "resistance_ohm_per_unit": "1",
+          "time_ns_per_unit": "1"
+        }
+      }
+    },
+    "claims": {
+      "all_six_spef_files_parsed": true,
+      "foundry_signoff_complete": false,
+      "fresh_parasitic_extraction_performed": false,
+      "independent_pex_crosscheck_verified": false,
+      "physical_spef_binding_verified": true,
+      "post_layout_pex_verified": false,
+      "post_physical_equivalence_prerequisite_verified": true,
+      "silicon_verified": false,
+      "spef_declared_capacitance_consistency_verified": true,
+      "spef_negative_controls_detected": true,
+      "spef_semantic_repeatability_verified": true,
+      "spef_units_and_structure_validated": true
+    },
+    "parser_contract": {
+      "canonicalization": "resolved-name-map, sorted ports/nets/connections/capacitances/resistances, base-unit normalized numeric values, semantic design flow retained, producer metadata excluded",
+      "capacitance_forms": [
+        "ground",
+        "coupling"
+      ],
+      "connection_forms": [
+        "*P node direction",
+        "*I node direction *D cell"
+      ],
+      "declared_capacitance_absolute_tolerance_pf": "0.000000000001",
+      "declared_capacitance_relative_tolerance": "0.00001",
+      "resistance_form": "undirected edge",
+      "spef_standard": "ieee 1481-1999"
+    },
+    "reference_id": "ihp-sg13g2-spef-semantic-tiny-v1"
+  }
+}
