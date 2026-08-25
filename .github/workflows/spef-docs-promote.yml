@@ -1,0 +1,263 @@
+name: Promote qualified SPEF documentation
+
+on:
+  push:
+    branches:
+      - feat/spef-semantic-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/spef-semantic-evidence
+          fetch-depth: 0
+
+      - name: Reconcile permanent evidence documentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f'{path}: expected one documentation anchor, found {count}'
+                  )
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'README.md',
+              '''- same-run post-physical sequential equivalence for both routed attempts of every backend;
+- independent data, valid-latency, and reset negative controls for both proof obligations.
+''',
+              '''- same-run post-physical sequential equivalence for both routed attempts of every backend;
+- independent data, valid-latency, and reset negative controls for both proof obligations;
+- strict semantic parsing and canonical RC-network validation of all six routed SPEF files;
+- declared-capacitance consistency, two-attempt semantic repeatability, and nine SPEF fault controls.
+''',
+          )
+          replace_once(
+              'README.md',
+              '- activity-qualified power or validated PEX;\n',
+              '- activity-qualified power, fresh parasitic re-extraction, or independently validated PEX;\n',
+          )
+          replace_once(
+              'README.md',
+              '''only for the exact two-state, zero-delay, clock-edge 4×6 contract.
+
+## Earlier evidence ladder
+''',
+              '''only for the exact two-state, zero-delay, clock-edge 4×6 contract.
+
+## Routed SPEF semantic validation
+
+A downstream exact-head workflow consumes the physical and post-physical artifacts from the same
+successful physical workflow run. It then parses all six routed SPEF files into complete canonical
+RC graphs rather than treating file existence or a raw digest as PEX validation.
+
+The permanent gate validates headers, name-map references, ports, connections, ground and coupling
+capacitances, resistance edges, unit conversion, represented resistance endpoints, and agreement
+between every declared `*D_NET` capacitance and its parsed `*CAP` sum. Equivalent name-map IDs,
+record ordering, producer timestamps, and equivalent units do not change the canonical digest;
+design flow, names, connectivity, cell types, and RC values do.
+
+For the exact 4×6 routed regression:
+
+| Backend | Nets | Nodes | Ground caps | Coupling caps | Resistors | Total declared capacitance | Total resistance |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `shared_dag` | **1,262** | **5,959** | **5,959** | **13,502** | **4,697** | **3.703339197 pF** | **144,063.8678 Ω** |
+| `naive_shift_add` | 1,386 | 6,638 | 6,638 | 15,590 | 5,252 | 4.0755655916 pF | 162,585.9118 Ω |
+| `constant_multipliers` | 1,402 | 6,743 | 6,743 | 16,378 | 5,341 | 4.5813538824 pF | 165,656.1936 Ω |
+
+Each backend also requires declared-capacitance corruption, resistance-network corruption, and unit
+corruption controls. The result qualifies binding, structural/semantic parsing, internal
+capacitance consistency, and repeatability of the producer's existing SPEF output. It does **not**
+perform a fresh extraction or independently prove that the parasitics are physically correct.
+
+See [Routed SPEF semantic evidence](docs/SPEF_SEMANTIC_EVIDENCE.md).
+
+## Earlier evidence ladder
+''',
+          )
+          replace_once(
+              'README.md',
+              '''- [Post-physical equivalence](docs/POST_PHYSICAL_EQUIVALENCE.md)
+- [Post-physical status](docs/POST_PHYSICAL_STATUS.md)
+''',
+              '''- [Post-physical equivalence](docs/POST_PHYSICAL_EQUIVALENCE.md)
+- [Routed SPEF semantic evidence](docs/SPEF_SEMANTIC_EVIDENCE.md)
+- [Post-physical status](docs/POST_PHYSICAL_STATUS.md)
+''',
+          )
+
+          replace_once(
+              'docs/ROADMAP.md',
+              '''- stable regression reference and same-run evidence artifact;
+- comparative physical observations enabled for the exact contract.
+''',
+              '''- stable regression reference and same-run evidence artifact;
+- comparative physical observations enabled for the exact contract;
+- all six routed SPEF files bound to their physical manifests and parsed into canonical RC graphs;
+- declared-capacitance consistency, semantic two-attempt repeatability, and nine SPEF fault controls.
+''',
+          )
+          replace_once(
+              'docs/ROADMAP.md',
+              '''- validated extraction and a clearly scoped PEX cross-check;
+''',
+              '''- fresh OpenRCX extraction from the exact routed OpenDB under pinned rules and isolated replays;
+- a sufficiently independent PEX cross-check before enabling `post_layout_pex_verified`;
+''',
+          )
+          replace_once(
+              'docs/ROADMAP.md',
+              '''**Current boundary:** routed functional comparison is qualified for one 4×6 microcase. DRC, LVS,
+activity power, validated PEX, foundry sign-off, and silicon remain false.
+''',
+              '''**Current boundary:** routed functional comparison and semantic validation of the six emitted SPEF
+files are qualified for one 4×6 microcase. Fresh extraction, independent PEX validation, DRC, LVS,
+activity power, foundry sign-off, and silicon remain false.
+''',
+          )
+
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''  → data / valid-latency / reset negative controls
+  → stable regression binding
+''',
+              '''  → data / valid-latency / reset negative controls
+  → stable regression binding
+  → exact six-SPEF and run-manifest binding
+  → complete canonical RC-graph parsing and declared-capacitance checks
+  → two-attempt semantic repeatability and nine SPEF fault controls
+''',
+          )
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''  "post_physical_equivalence_verified": true,
+  "comparative_ppa_claim_enabled": true
+''',
+              '''  "post_physical_equivalence_verified": true,
+  "comparative_ppa_claim_enabled": true,
+  "physical_spef_binding_verified": true,
+  "post_physical_equivalence_prerequisite_verified": true,
+  "all_six_spef_files_parsed": true,
+  "spef_units_and_structure_validated": true,
+  "spef_declared_capacitance_consistency_verified": true,
+  "spef_semantic_repeatability_verified": true,
+  "spef_negative_controls_detected": true
+''',
+          )
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''power-up recovery.
+
+## Still unqualified
+''',
+              '''power-up recovery.
+
+## Routed SPEF semantic scope
+
+The downstream SPEF artifact consumes the matched physical and post-physical artifacts produced by
+one successful exact-head physical workflow run. It rechecks the run-manifest and raw SPEF digest
+bindings for all six attempts, parses every supported record, converts units, and compares complete
+canonical RC graphs between the two attempts of each backend.
+
+For every routed net it checks connections, ground and coupling capacitances, resistance edges,
+name-map references, finite non-negative values, represented resistance endpoints, and consistency
+between the declared `*D_NET` capacitance and the parsed `*CAP` sum. Three controls per backend must
+detect declared-capacitance drift, a valid resistance-value mutation, and an invalid unit.
+
+This qualifies the semantics and repeatability of the SPEF files already emitted by the pinned
+physical flow. It is not a fresh extraction from GDS/OpenDB and is not an independent judgment that
+the parasitic model is physically correct. See
+[Routed SPEF semantic evidence](SPEF_SEMANTIC_EVIDENCE.md).
+
+## Still unqualified
+''',
+          )
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''  "power_estimated_with_activity": false,
+  "post_layout_pex_verified": false,
+''',
+              '''  "power_estimated_with_activity": false,
+  "fresh_parasitic_extraction_performed": false,
+  "independent_pex_crosscheck_verified": false,
+  "post_layout_pex_verified": false,
+''',
+          )
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''A zero internal routing-DRC count is not an independent DRC result. Tool-emitted power observations
+are not activity-qualified power. SPEF existence is not validated PEX. No result in this layer is
+foundry sign-off.
+''',
+              '''A zero internal routing-DRC count is not an independent DRC result. Tool-emitted power observations
+are not activity-qualified power. Even fully parsed, repeatable SPEF output is not fresh or
+independently validated PEX. No result in this layer is foundry sign-off.
+''',
+          )
+          replace_once(
+              'docs/POST_PHYSICAL_STATUS.md',
+              '''Pull-request runs explicitly check out the PR branch-head SHA. Push and manual runs use the exact
+triggering commit SHA. Permanent evidence contains no historical run ID dependency.
+''',
+              '''Pull-request runs explicitly check out the PR branch-head SHA. Push runs use the exact triggering
+commit SHA. The SPEF workflow does not hard-code a historical run ID: it resolves the successful
+physical workflow for that exact head, downloads both prerequisite artifacts from that same run,
+and records the upstream workflow run ID as provenance.
+''',
+          )
+
+          replace_once(
+              'docs/OPENROAD_PHYSICAL_EVIDENCE.md',
+              '''See [Routed registered post-physical equivalence](POST_PHYSICAL_EQUIVALENCE.md).
+
+## Important non-claims
+''',
+              '''See [Routed registered post-physical equivalence](POST_PHYSICAL_EQUIVALENCE.md).
+
+A further exact-head downstream layer binds and semantically parses all six emitted SPEF files,
+checks per-net declared-capacitance consistency, compares complete canonical RC graphs across both
+attempts, and requires nine fault controls. That layer qualifies the existing SPEF output's
+structure, internal consistency, and repeatability, but it still does not perform fresh extraction
+or independently validate the physical parasitics.
+
+See [Routed SPEF semantic evidence](SPEF_SEMANTIC_EVIDENCE.md).
+
+## Important non-claims
+''',
+          )
+          replace_once(
+              'docs/OPENROAD_PHYSICAL_EVIDENCE.md',
+              '- SPEF generation is not validated PEX.\n',
+              '- SPEF generation and semantic repeatability are not fresh or independently validated PEX.\n',
+          )
+          PY
+
+          rm .github/workflows/spef-docs-promote.yml
+          git diff --check
+
+      - name: Commit the qualified documentation state
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            README.md \
+            docs/ROADMAP.md \
+            docs/POST_PHYSICAL_STATUS.md \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md \
+            .github/workflows/spef-docs-promote.yml
+          git commit -m 'docs: qualify routed SPEF semantic evidence'
+          git push origin HEAD:feat/spef-semantic-evidence
