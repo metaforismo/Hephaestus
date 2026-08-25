@@ -16,6 +16,9 @@ verified registered sources
   → steady-state temporal induction
   → data / valid-latency / reset negative controls
   → stable regression binding
+  → exact six-SPEF and run-manifest binding
+  → complete canonical RC-graph parsing and declared-capacitance checks
+  → two-attempt semantic repeatability and nine SPEF fault controls
 ```
 
 Qualified claims for this exact contract:
@@ -29,17 +32,27 @@ Qualified claims for this exact contract:
   "valid_latency_negative_control_detected": true,
   "reset_state_negative_control_detected": true,
   "post_physical_equivalence_verified": true,
-  "comparative_ppa_claim_enabled": true
+  "comparative_ppa_claim_enabled": true,
+  "physical_spef_binding_verified": true,
+  "post_physical_equivalence_prerequisite_verified": true,
+  "all_six_spef_files_parsed": true,
+  "spef_units_and_structure_validated": true,
+  "spef_declared_capacitance_consistency_verified": true,
+  "spef_semantic_repeatability_verified": true,
+  "spef_negative_controls_detected": true
 }
 ```
 
 The physical artifact remains immutable and correctly reports downstream equivalence as false. The
 separate post-physical artifact consumes and hashes that physical artifact, proves both routed
-attempts for all three backends, and is the only layer allowed to enable the two downstream claims.
+attempts for all three backends, and is the only layer allowed to enable the routed-equivalence and
+comparative-PPA claims. The SPEF artifact then consumes the physical and post-physical artifacts
+from one successful exact-head physical workflow run and is the only layer allowed to enable the
+SPEF semantic claims.
 
 ## Proof scope
 
-The result is:
+The routed functional result is:
 
 ```text
 two-state
@@ -57,6 +70,23 @@ clock-edge behavior after the explicit reset sequence. It does not cover arbitra
 reset transitions between edges, metastability, analog reset behavior, or arbitrary unreset
 power-up recovery.
 
+## Routed SPEF semantic scope
+
+The downstream SPEF artifact consumes the matched physical and post-physical artifacts produced by
+one successful exact-head physical workflow run. It rechecks the run-manifest and raw SPEF digest
+bindings for all six attempts, parses every supported record, converts units, and compares complete
+canonical RC graphs between the two attempts of each backend.
+
+For every routed net it checks connections, ground and coupling capacitances, resistance edges,
+name-map references, finite non-negative values, represented resistance endpoints, and consistency
+between the declared `*D_NET` capacitance and the parsed `*CAP` sum. Three controls per backend must
+detect declared-capacitance drift, a valid resistance-value mutation, and an invalid unit.
+
+This qualifies the semantics and repeatability of the SPEF files already emitted by the pinned
+physical flow. It is not a fresh extraction from GDS/OpenDB and is not an independent judgment that
+the parasitic model is physically correct. See
+[Routed SPEF semantic evidence](SPEF_SEMANTIC_EVIDENCE.md).
+
 ## Still unqualified
 
 ```json
@@ -66,6 +96,8 @@ power-up recovery.
   "drc_clean": false,
   "lvs_clean": false,
   "power_estimated_with_activity": false,
+  "fresh_parasitic_extraction_performed": false,
+  "independent_pex_crosscheck_verified": false,
   "post_layout_pex_verified": false,
   "foundry_signoff_complete": false,
   "silicon_verified": false
@@ -73,8 +105,8 @@ power-up recovery.
 ```
 
 A zero internal routing-DRC count is not an independent DRC result. Tool-emitted power observations
-are not activity-qualified power. SPEF existence is not validated PEX. No result in this layer is
-foundry sign-off.
+are not activity-qualified power. Even fully parsed, repeatable SPEF output is not fresh or
+independently validated PEX. No result in this layer is foundry sign-off.
 
 ## Comparative physical observation
 
@@ -94,10 +126,13 @@ Every qualifying artifact records:
 
 - the exact checked-out Git revision;
 - workflow run and attempt metadata;
-- physical, prepared, registered, model, reference, script, log, and routed-netlist SHA-256 values;
+- physical, prepared, registered, model, reference, script, log, routed-netlist, and SPEF SHA-256
+  values;
 - both physical attempts per backend;
-- raw positive and negative proof logs;
+- raw positive and negative proof or mutation artifacts;
 - the explicit claim boundary.
 
-Pull-request runs explicitly check out the PR branch-head SHA. Push and manual runs use the exact
-triggering commit SHA. Permanent evidence contains no historical run ID dependency.
+Pull-request runs explicitly check out the PR branch-head SHA. Push runs use the exact triggering
+commit SHA. The SPEF workflow does not hard-code a historical run ID: it resolves the successful
+physical workflow for that exact head, downloads both prerequisite artifacts from that same run,
+and records the upstream workflow run ID as provenance.

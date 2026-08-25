@@ -95,10 +95,18 @@ post-physical artifact may set the two fields true.
 
 See [Routed registered post-physical equivalence](POST_PHYSICAL_EQUIVALENCE.md).
 
+A further exact-head downstream layer binds and semantically parses all six emitted SPEF files,
+checks per-net declared-capacitance consistency, compares complete canonical RC graphs across both
+attempts, and requires nine fault controls. That layer qualifies the existing SPEF output's
+structure, internal consistency, and repeatability, but it still does not perform fresh extraction
+or independently validate the physical parasitics.
+
+See [Routed SPEF semantic evidence](SPEF_SEMANTIC_EVIDENCE.md).
+
 ## Important non-claims
 
 - Internal route DRC count zero is not independent DRC cleanliness.
-- SPEF generation is not validated PEX.
+- SPEF generation and semantic repeatability are not fresh or independently validated PEX.
 - Tool-emitted power is not activity-qualified power.
 - Routed timing is not foundry sign-off STA.
 - This microcase does not establish model-level energy, throughput, or universal superiority.
