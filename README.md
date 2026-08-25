@@ -32,7 +32,9 @@ Implemented and continuously checked:
 - three backends × two repeatable pinned OpenROAD Flow Scripts attempts;
 - exact routed GDS, DEF, Verilog, OpenDB, SPEF, manifests, and SHA-256 provenance;
 - same-run post-physical sequential equivalence for both routed attempts of every backend;
-- independent data, valid-latency, and reset negative controls for both proof obligations.
+- independent data, valid-latency, and reset negative controls for both proof obligations;
+- strict semantic parsing and canonical RC-network validation of all six routed SPEF files;
+- declared-capacitance consistency, two-attempt semantic repeatability, and nine SPEF fault controls.
 
 Not claimed:
 
@@ -41,7 +43,7 @@ Not claimed:
 - four-state or timing-annotated routed equivalence;
 - arbitrary asynchronous-reset-event equivalence;
 - independent DRC or LVS cleanliness;
-- activity-qualified power or validated PEX;
+- activity-qualified power, fresh parasitic re-extraction, or independently validated PEX;
 - foundry sign-off, 7 nm readiness, token/s claims, or measured silicon.
 
 See [Post-physical status](docs/POST_PHYSICAL_STATUS.md) for the authoritative claim matrix.
@@ -147,6 +149,33 @@ comparative_ppa_claim_enabled = true
 ```
 
 only for the exact two-state, zero-delay, clock-edge 4×6 contract.
+
+## Routed SPEF semantic validation
+
+A downstream exact-head workflow consumes the physical and post-physical artifacts from the same
+successful physical workflow run. It then parses all six routed SPEF files into complete canonical
+RC graphs rather than treating file existence or a raw digest as PEX validation.
+
+The permanent gate validates headers, name-map references, ports, connections, ground and coupling
+capacitances, resistance edges, unit conversion, represented resistance endpoints, and agreement
+between every declared `*D_NET` capacitance and its parsed `*CAP` sum. Equivalent name-map IDs,
+record ordering, producer timestamps, and equivalent units do not change the canonical digest;
+design flow, names, connectivity, cell types, and RC values do.
+
+For the exact 4×6 routed regression:
+
+| Backend | Nets | Nodes | Ground caps | Coupling caps | Resistors | Total declared capacitance | Total resistance |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `shared_dag` | **1,262** | **5,959** | **5,959** | **13,502** | **4,697** | **3.703339197 pF** | **144,063.8678 Ω** |
+| `naive_shift_add` | 1,386 | 6,638 | 6,638 | 15,590 | 5,252 | 4.0755655916 pF | 162,585.9118 Ω |
+| `constant_multipliers` | 1,402 | 6,743 | 6,743 | 16,378 | 5,341 | 4.5813538824 pF | 165,656.1936 Ω |
+
+Each backend also requires declared-capacitance corruption, resistance-network corruption, and unit
+corruption controls. The result qualifies binding, structural/semantic parsing, internal
+capacitance consistency, and repeatability of the producer's existing SPEF output. It does **not**
+perform a fresh extraction or independently prove that the parasitics are physically correct.
+
+See [Routed SPEF semantic evidence](docs/SPEF_SEMANTIC_EVIDENCE.md).
 
 ## Earlier evidence ladder
 
@@ -276,6 +305,7 @@ do not belong in this repository.
 - [Registered tiles](docs/REGISTERED_TILES.md)
 - [OpenROAD physical evidence](docs/OPENROAD_PHYSICAL_EVIDENCE.md)
 - [Post-physical equivalence](docs/POST_PHYSICAL_EQUIVALENCE.md)
+- [Routed SPEF semantic evidence](docs/SPEF_SEMANTIC_EVIDENCE.md)
 - [Post-physical status](docs/POST_PHYSICAL_STATUS.md)
 - [Patent landscape](docs/IP_LANDSCAPE.md)
 - [Foundry path](docs/FOUNDRY_PATH.md)

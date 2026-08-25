@@ -61,19 +61,23 @@ Implemented:
 - separate steady-state temporal induction;
 - data, valid-latency, and reset controls for both obligations;
 - stable regression reference and same-run evidence artifact;
-- comparative physical observations enabled for the exact contract.
+- comparative physical observations enabled for the exact contract;
+- all six routed SPEF files bound to their physical manifests and parsed into canonical RC graphs;
+- declared-capacitance consistency, semantic two-attempt repeatability, and nine SPEF fault controls.
 
 Still required before M4 is complete:
 
 - independent DRC with a versioned open IHP rule deck and invalid-geometry control;
 - LVS against the exact expected netlist with layout- and schematic-side controls;
-- validated extraction and a clearly scoped PEX cross-check;
+- fresh OpenRCX extraction from the exact routed OpenDB under pinned rules and isolated replays;
+- a sufficiently independent PEX cross-check before enabling `post_layout_pex_verified`;
 - deterministic activity generation and routed activity-based power;
 - scan/DFT planning, physical I/O, and eventually a pad-ring wrapper;
 - variation and reliability layers only where real collateral supports them.
 
-**Current boundary:** routed functional comparison is qualified for one 4×6 microcase. DRC, LVS,
-activity power, validated PEX, foundry sign-off, and silicon remain false.
+**Current boundary:** routed functional comparison and semantic validation of the six emitted SPEF
+files are qualified for one 4×6 microcase. Fresh extraction, independent PEX validation, DRC, LVS,
+activity power, foundry sign-off, and silicon remain false.
 
 **Exit criterion:** reproducible independently checked DRC/LVS-clean GDS plus validated
 post-layout timing, extraction, and activity evidence from a clean checkout.
