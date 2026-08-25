@@ -72,9 +72,7 @@ def _require_digest(value: Any, *, context: str) -> str:
 
 def _require_revision(value: Any, *, context: str) -> str:
     if not isinstance(value, str) or _GIT_SHA_RE.fullmatch(value) is None:
-        raise SPEFSemanticError(
-            f"{context} must be a lowercase 40-character Git SHA"
-        )
+        raise SPEFSemanticError(f"{context} must be a lowercase 40-character Git SHA")
     return value
 
 
@@ -106,9 +104,7 @@ def _reject_symlink_components(candidate: Path, *, context: str) -> None:
     for part in absolute.parts[1:]:
         current /= part
         if current.is_symlink():
-            raise SPEFSemanticError(
-                f"{context} path must not contain symlinks: {absolute}"
-            )
+            raise SPEFSemanticError(f"{context} path must not contain symlinks: {absolute}")
 
 
 def _resolve_input_directory(path: Path, *, context: str) -> Path:
@@ -151,9 +147,7 @@ def _resolve_under(root: Path, relative: Any, *, context: str) -> Path:
     if raw.is_absolute():
         raise SPEFSemanticError(f"{context} path must be relative")
     if ".." in raw.parts:
-        raise SPEFSemanticError(
-            f"{context} path escapes its artifact root via parent traversal"
-        )
+        raise SPEFSemanticError(f"{context} path escapes its artifact root via parent traversal")
     candidate = root / raw
     _reject_symlink_components(candidate, context=context)
     resolved = candidate.resolve()
@@ -177,9 +171,7 @@ def _verify_file(
     expected = _require_digest(expected_digest, context=f"{context} digest")
     actual = _sha256(path)
     if actual != expected:
-        raise SPEFSemanticError(
-            f"{context} digest mismatch: expected {expected}, got {actual}"
-        )
+        raise SPEFSemanticError(f"{context} digest mismatch: expected {expected}, got {actual}")
     return path
 
 
@@ -201,16 +193,10 @@ def _copy_bound(source: Path, destination: Path, *, expected_digest: str, contex
 def _execution_context(source_revision: str | None) -> dict[str, Any]:
     revision = source_revision or os.environ.get("GITHUB_SHA")
     if revision is not None and _GIT_SHA_RE.fullmatch(revision) is None:
-        raise SPEFSemanticError(
-            "source revision must be a lowercase 40-character Git SHA"
-        )
+        raise SPEFSemanticError("source revision must be a lowercase 40-character Git SHA")
     upstream_run_id = os.environ.get("HEPHAESTUS_UPSTREAM_PHYSICAL_RUN_ID")
-    if upstream_run_id is not None and (
-        not upstream_run_id.isdigit() or int(upstream_run_id) <= 0
-    ):
-        raise SPEFSemanticError(
-            "upstream physical workflow run ID must be a positive integer"
-        )
+    if upstream_run_id is not None and (not upstream_run_id.isdigit() or int(upstream_run_id) <= 0):
+        raise SPEFSemanticError("upstream physical workflow run ID must be a positive integer")
     return {
         "source_revision": revision,
         "upstream_physical_workflow_run_id": upstream_run_id,

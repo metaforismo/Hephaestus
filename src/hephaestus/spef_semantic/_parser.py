@@ -103,9 +103,7 @@ def _header_tokens(line: str, *, line_number: int) -> list[str]:
     try:
         return shlex.split(line, posix=True)
     except ValueError as exc:
-        raise SPEFSemanticError(
-            f"line {line_number}: malformed quoted SPEF header: {exc}"
-        ) from exc
+        raise SPEFSemanticError(f"line {line_number}: malformed quoted SPEF header: {exc}") from exc
 
 
 def _parse_unit(
@@ -117,24 +115,18 @@ def _parse_unit(
     line_number: int,
 ) -> tuple[str, Decimal]:
     if len(tokens) != 3:
-        raise SPEFSemanticError(
-            f"line {line_number}: {directive} must contain multiplier and unit"
-        )
+        raise SPEFSemanticError(f"line {line_number}: {directive} must contain multiplier and unit")
     multiplier = _parse_decimal(
         tokens[1],
         context=f"line {line_number} {directive} multiplier",
         nonnegative=False,
     )
     if multiplier <= 0:
-        raise SPEFSemanticError(
-            f"line {line_number}: {directive} multiplier must be positive"
-        )
+        raise SPEFSemanticError(f"line {line_number}: {directive} multiplier must be positive")
     unit = tokens[2].upper()
     factor = factors.get(unit)
     if factor is None:
-        raise SPEFSemanticError(
-            f"line {line_number}: unsupported {directive} unit {unit!r}"
-        )
+        raise SPEFSemanticError(f"line {line_number}: unsupported {directive} unit {unit!r}")
     return canonical_name, multiplier * factor
 
 
@@ -207,9 +199,7 @@ def _parse_header(
             headers[directive] = tokens[1:]
         elif directive == "*DESIGN_FLOW":
             if len(tokens) < 2:
-                raise SPEFSemanticError(
-                    f"line {line_number}: *DESIGN_FLOW must not be empty"
-                )
+                raise SPEFSemanticError(f"line {line_number}: *DESIGN_FLOW must not be empty")
             headers[directive] = tokens[1:]
         else:
             if len(tokens) != 2:
@@ -249,18 +239,12 @@ def _parse_name_map(
             break
         parts = line.split(maxsplit=1)
         if len(parts) != 2 or _NAME_MAP_KEY_RE.fullmatch(parts[0]) is None:
-            raise SPEFSemanticError(
-                f"line {line_number}: malformed *NAME_MAP entry"
-            )
+            raise SPEFSemanticError(f"line {line_number}: malformed *NAME_MAP entry")
         key, value = parts
         if key in name_map:
-            raise SPEFSemanticError(
-                f"line {line_number}: duplicate *NAME_MAP key {key}"
-            )
+            raise SPEFSemanticError(f"line {line_number}: duplicate *NAME_MAP key {key}")
         if not value:
-            raise SPEFSemanticError(
-                f"line {line_number}: empty *NAME_MAP value for {key}"
-            )
+            raise SPEFSemanticError(f"line {line_number}: empty *NAME_MAP value for {key}")
         name_map[key] = value
         index += 1
     if index >= len(records) or records[index][1] != "*PORTS":
@@ -312,14 +296,10 @@ def _parse_connection(
     node = _resolve_name(tokens[1], name_map, context=f"line {line_number} connection")
     if tokens[0] == "*P":
         if len(tokens) != 3:
-            raise SPEFSemanticError(
-                f"line {line_number}: unsupported port-connection attributes"
-            )
+            raise SPEFSemanticError(f"line {line_number}: unsupported port-connection attributes")
         return ["port", node, tokens[2]]
     if len(tokens) != 5 or tokens[3] != "*D":
-        raise SPEFSemanticError(
-            f"line {line_number}: instance connection must bind one cell type"
-        )
+        raise SPEFSemanticError(f"line {line_number}: instance connection must bind one cell type")
     cell = _resolve_name(tokens[4], name_map, context=f"line {line_number} cell type")
     return ["instance", node, tokens[2], cell]
 
@@ -337,10 +317,13 @@ def _parse_net(
     name = _resolve_name(tokens[1], name_map, context=f"line {line_number} net")
     cap_factor = units["capacitance_pf_per_unit"]
     resistance_factor = units["resistance_ohm_per_unit"]
-    declared = _parse_decimal(
-        tokens[2],
-        context=f"line {line_number} declared capacitance",
-    ) * cap_factor
+    declared = (
+        _parse_decimal(
+            tokens[2],
+            context=f"line {line_number} declared capacitance",
+        )
+        * cap_factor
+    )
     index += 1
 
     if index >= len(records) or records[index][1] != "*CONN":
@@ -351,9 +334,7 @@ def _parse_net(
     while index < len(records) and records[index][1] != "*CAP":
         conn_line_number, conn_line = records[index]
         if conn_line.startswith("*") and not conn_line.startswith(("*P ", "*I ")):
-            raise SPEFSemanticError(
-                f"line {conn_line_number}: unexpected directive before *CAP"
-            )
+            raise SPEFSemanticError(f"line {conn_line_number}: unexpected directive before *CAP")
         connection = _parse_connection(
             conn_line,
             line_number=conn_line_number,
@@ -396,10 +377,13 @@ def _parse_net(
                 name_map,
                 context=f"line {cap_line_number} ground capacitance node",
             )
-            value = _parse_decimal(
-                cap_tokens[2],
-                context=f"line {cap_line_number} ground capacitance",
-            ) * cap_factor
+            value = (
+                _parse_decimal(
+                    cap_tokens[2],
+                    context=f"line {cap_line_number} ground capacitance",
+                )
+                * cap_factor
+            )
             cap_nodes.add(node)
             ground_sum += value
             ground_caps.append([node, _canonical_decimal(value)])
@@ -418,10 +402,13 @@ def _parse_net(
                 raise SPEFSemanticError(
                     f"line {cap_line_number}: coupling capacitance is self-connected"
                 )
-            value = _parse_decimal(
-                cap_tokens[3],
-                context=f"line {cap_line_number} coupling capacitance",
-            ) * cap_factor
+            value = (
+                _parse_decimal(
+                    cap_tokens[3],
+                    context=f"line {cap_line_number} coupling capacitance",
+                )
+                * cap_factor
+            )
             cap_nodes.update((lhs, rhs))
             coupling_sum += value
             first, second = sorted((lhs, rhs))
@@ -464,13 +451,14 @@ def _parse_net(
             context=f"line {res_line_number} resistance node",
         )
         if lhs == rhs:
-            raise SPEFSemanticError(
-                f"line {res_line_number}: resistance is self-connected"
+            raise SPEFSemanticError(f"line {res_line_number}: resistance is self-connected")
+        value = (
+            _parse_decimal(
+                res_tokens[3],
+                context=f"line {res_line_number} resistance",
             )
-        value = _parse_decimal(
-            res_tokens[3],
-            context=f"line {res_line_number} resistance",
-        ) * resistance_factor
+            * resistance_factor
+        )
         resistance_sum += value
         resistance_nodes.update((lhs, rhs))
         first, second = sorted((lhs, rhs))
@@ -486,8 +474,7 @@ def _parse_net(
     missing_resistance_nodes = sorted(resistance_nodes - known_nodes)
     if missing_resistance_nodes:
         raise SPEFSemanticError(
-            f"net {name!r} resistances reference unknown nodes: "
-            f"{missing_resistance_nodes[:5]}"
+            f"net {name!r} resistances reference unknown nodes: {missing_resistance_nodes[:5]}"
         )
 
     observed = ground_sum + coupling_sum
@@ -581,10 +568,7 @@ def _parse_document(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
         raise SPEFSemanticError("SPEF document contains no routed nets")
     nets.sort(key=lambda value: value["name"])
 
-    unit_contract = {
-        name: _canonical_decimal(value)
-        for name, value in sorted(units.items())
-    }
+    unit_contract = {name: _canonical_decimal(value) for name, value in sorted(units.items())}
     canonical = {
         "spef_standard": headers["*SPEF"],
         "design": headers["*DESIGN"],
@@ -622,15 +606,9 @@ def _parse_document(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
             "ground_capacitance_count": totals["ground_capacitance_count"],
             "coupling_capacitance_count": totals["coupling_capacitance_count"],
             "resistance_count": totals["resistance_count"],
-            "total_declared_capacitance_pf": _canonical_decimal(
-                totals["declared_capacitance_pf"]
-            ),
-            "total_ground_capacitance_pf": _canonical_decimal(
-                totals["ground_capacitance_pf"]
-            ),
-            "total_coupling_capacitance_pf": _canonical_decimal(
-                totals["coupling_capacitance_pf"]
-            ),
+            "total_declared_capacitance_pf": _canonical_decimal(totals["declared_capacitance_pf"]),
+            "total_ground_capacitance_pf": _canonical_decimal(totals["ground_capacitance_pf"]),
+            "total_coupling_capacitance_pf": _canonical_decimal(totals["coupling_capacitance_pf"]),
             "total_resistance_ohm": _canonical_decimal(totals["resistance_ohm"]),
             "max_declared_capacitance_error_pf": _canonical_decimal(
                 totals["declared_capacitance_error_pf"]

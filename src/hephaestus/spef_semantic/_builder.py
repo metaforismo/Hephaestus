@@ -164,14 +164,10 @@ def _validate_source_chain(
         if post_backend.get("passed") is not True:
             raise SPEFSemanticError(f"{backend} post-physical proof did not pass")
         if post_backend.get("both_physical_attempts_bound") is not True:
-            raise SPEFSemanticError(
-                f"{backend} post-physical proof did not bind both attempts"
-            )
+            raise SPEFSemanticError(f"{backend} post-physical proof did not bind both attempts")
         post_attempts = post_backend.get("attempts")
         if not isinstance(post_attempts, list) or len(post_attempts) != 2:
-            raise SPEFSemanticError(
-                f"{backend} post-physical attempt set is malformed"
-            )
+            raise SPEFSemanticError(f"{backend} post-physical attempt set is malformed")
         for attempt in (1, 2):
             physical_run = next(
                 (
@@ -382,9 +378,7 @@ def _collect_evidence(
         "execution": _execution_context(chain["source_revision"]),
         "source": {
             "physical_evidence_sha256": _sha256(chain["physical_path"]),
-            "post_physical_equivalence_evidence_sha256": _sha256(
-                chain["post_physical_path"]
-            ),
+            "post_physical_equivalence_evidence_sha256": _sha256(chain["post_physical_path"]),
         },
         "parser_contract": parser_contract(),
         "backends": {},
@@ -427,9 +421,7 @@ def _collect_evidence(
                 context=f"{backend} attempt {attempt} bound run manifest",
             )
             attempt_root = (
-                physical_root
-                / "downloaded-runs"
-                / f"openroad-physical-run-{backend}-{attempt}"
+                physical_root / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
             )
             original_manifest = _verify_file(
                 attempt_root,
@@ -438,9 +430,7 @@ def _collect_evidence(
                 context=f"{backend} attempt {attempt} original run manifest",
             )
             if _sha256(bound_manifest) != _sha256(original_manifest):
-                raise SPEFSemanticError(
-                    f"{backend} attempt {attempt} run-manifest copies differ"
-                )
+                raise SPEFSemanticError(f"{backend} attempt {attempt} run-manifest copies differ")
             manifest = _load_json(bound_manifest)
             if manifest.get("schema") != "hephaestus.openroad-physical-run.v1":
                 raise SPEFSemanticError(
@@ -473,9 +463,7 @@ def _collect_evidence(
             )
             metadata = run.get("artifacts", {}).get("final_spef")
             if not isinstance(metadata, dict):
-                raise SPEFSemanticError(
-                    f"{backend} attempt {attempt} SPEF metadata is missing"
-                )
+                raise SPEFSemanticError(f"{backend} attempt {attempt} SPEF metadata is missing")
             if manifest.get("artifacts", {}).get("final_spef") != metadata:
                 raise SPEFSemanticError(
                     f"{backend} attempt {attempt} SPEF metadata differs from its manifest"
@@ -488,9 +476,7 @@ def _collect_evidence(
             )
             size = metadata.get("size_bytes")
             if type(size) is not int or size != spef.stat().st_size:
-                raise SPEFSemanticError(
-                    f"{backend} attempt {attempt} SPEF size binding differs"
-                )
+                raise SPEFSemanticError(f"{backend} attempt {attempt} SPEF size binding differs")
             normalized_digest = _date_normalized_sha256(spef)
             expected_normalized = _require_digest(
                 manifest.get("normalized", {}).get("spef_date_normalized_sha256"),

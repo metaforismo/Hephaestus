@@ -148,9 +148,7 @@ def _make_artifacts(tmp_path: Path) -> tuple[Path, Path]:
         normalized: list[str] = []
         for attempt in (1, 2):
             attempt_root = (
-                physical
-                / "downloaded-runs"
-                / f"openroad-physical-run-{backend}-{attempt}"
+                physical / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
             )
             spef = attempt_root / "results" / "6_final.spef"
             spef.parent.mkdir(parents=True, exist_ok=True)
@@ -331,9 +329,7 @@ def test_parser_rejects_an_undefined_name_map_reference() -> None:
 
 def test_resistance_change_changes_the_canonical_digest() -> None:
     original = spef_semantic.parse_spef_text(_spef())
-    mutated = spef_semantic.parse_spef_text(
-        _spef().replace("2 *2:A *2:Y 2", "2 *2:A *2:Y 3")
-    )
+    mutated = spef_semantic.parse_spef_text(_spef().replace("2 *2:A *2:Y 2", "2 *2:A *2:Y 3"))
 
     assert original["canonical_sha256"] != mutated["canonical_sha256"]
     assert original["metrics"]["total_resistance_ohm"] == "4"
@@ -357,10 +353,7 @@ def test_end_to_end_builder_binds_six_spefs_and_nine_controls(tmp_path: Path) ->
     assert evidence["claims"]["all_six_spef_files_parsed"] is True
     assert evidence["claims"]["post_layout_pex_verified"] is False
     assert sum(len(value["attempts"]) for value in evidence["backends"].values()) == 6
-    assert (
-        sum(len(value["negative_controls"]) for value in evidence["backends"].values())
-        == 9
-    )
+    assert sum(len(value["negative_controls"]) for value in evidence["backends"].values()) == 9
     assert (output / "spef_semantic_evidence.json").is_file()
     assert (output / "SUMMARY.md").is_file()
 
@@ -437,9 +430,7 @@ def test_builder_rejects_post_physical_attempt_binding_drift(tmp_path: Path) -> 
     physical, post = _make_artifacts(tmp_path)
     post_manifest = post / "post_physical_equivalence_evidence.json"
     value = json.loads(post_manifest.read_text(encoding="utf-8"))
-    value["backends"]["shared_dag"]["attempts"][0]["physical_run_manifest"][
-        "sha256"
-    ] = "0" * 64
+    value["backends"]["shared_dag"]["attempts"][0]["physical_run_manifest"]["sha256"] = "0" * 64
     _write_json(post_manifest, value)
 
     with pytest.raises(
