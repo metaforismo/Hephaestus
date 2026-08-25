@@ -204,8 +204,16 @@ def _execution_context(source_revision: str | None) -> dict[str, Any]:
         raise SPEFSemanticError(
             "source revision must be a lowercase 40-character Git SHA"
         )
+    upstream_run_id = os.environ.get("HEPHAESTUS_UPSTREAM_PHYSICAL_RUN_ID")
+    if upstream_run_id is not None and (
+        not upstream_run_id.isdigit() or int(upstream_run_id) <= 0
+    ):
+        raise SPEFSemanticError(
+            "upstream physical workflow run ID must be a positive integer"
+        )
     return {
         "source_revision": revision,
+        "upstream_physical_workflow_run_id": upstream_run_id,
         "github_repository": os.environ.get("GITHUB_REPOSITORY"),
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
