@@ -13,6 +13,11 @@ from hephaestus.pvt_corner import _common, _opensta, _reference
 BACKENDS = ("shared_dag", "naive_shift_add", "constant_multipliers")
 CORNERS = ("slow", "typ", "fast")
 REVISION = "1" * 40
+UPSTREAM_RUN_ID = "123"
+UPSTREAM_WORKFLOW_REF = (
+    "metaforismo/Hephaestus/.github/workflows/"
+    "openroad-physical-evidence.yml@refs/pull/42/merge"
+)
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -361,7 +366,11 @@ def _make_artifacts(tmp_path: Path) -> tuple[Path, Path]:
             "evidence_level": (
                 "exact_registered_source_to_routed_sequential_equivalence"
             ),
-            "execution": {"source_revision": REVISION},
+            "execution": {
+                "source_revision": REVISION,
+                "github_run_id": UPSTREAM_RUN_ID,
+                "github_workflow_ref": UPSTREAM_WORKFLOW_REF,
+            },
             "source": {
                 "physical_evidence_sha256": physical_digest,
                 "prepared_manifest_sha256": prepared_digest,
@@ -494,7 +503,7 @@ def test_end_to_end_bootstrap_reference_and_strict_qualification(
         values["contract"],
         bootstrap_out,
         source_revision=REVISION,
-        upstream_run_id="123",
+        upstream_run_id=UPSTREAM_RUN_ID,
     )
     assert bootstrap["claims"]["all_36_positive_analyses_completed"] is True
     assert bootstrap["claims"]["comparative_pvt_claim_enabled"] is False
@@ -525,12 +534,14 @@ def test_end_to_end_bootstrap_reference_and_strict_qualification(
         final_out,
         source_revision=REVISION,
         reference_path=reference,
-        upstream_run_id="124",
+        upstream_run_id=UPSTREAM_RUN_ID,
     )
     assert final["regression"]["passed"] is True
     assert final["claims"]["comparative_pvt_claim_enabled"] is True
     assert final["claims"]["foundry_signoff_sta_performed"] is False
-    assert final["execution"]["upstream_physical_workflow_run_id"] == "124"
+    assert final["execution"]["upstream_physical_workflow_run_id"] == (
+        UPSTREAM_RUN_ID
+    )
     assert (
         pvt_corner.validate_existing_reference(
             final_out / "pvt_corner_evidence.json",
@@ -638,7 +649,6 @@ def test_stable_projection_excludes_run_ids(tmp_path: Path) -> None:
         values["contract"],
         first_out,
         source_revision=REVISION,
-        upstream_run_id="111",
     )
     second = pvt_corner.build_evidence(
         values["physical"],
@@ -649,7 +659,8 @@ def test_stable_projection_excludes_run_ids(tmp_path: Path) -> None:
         values["contract"],
         second_out,
         source_revision=REVISION,
-        upstream_run_id="222",
     )
+    first["execution"]["upstream_physical_workflow_run_id"] = "111"
+    second["execution"]["upstream_physical_workflow_run_id"] = "222"
 
     assert _reference.stable_projection(first) == _reference.stable_projection(second)
