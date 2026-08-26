@@ -1,0 +1,192 @@
+name: Research IHP KLayout DRC probe
+
+on:
+  push:
+    branches:
+      - research/ihp-klayout-drc-probe-v1
+  workflow_dispatch:
+
+concurrency:
+  group: research-ihp-klayout-drc-probe-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install and record the research KLayout package
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          apt-cache policy klayout | tee build-klayout-policy.txt
+          sudo apt-get install -y --no-install-recommends klayout
+          command -v klayout
+          klayout -v | tee build-klayout-version.txt
+          dpkg-query -W -f='${Package}\t${Version}\n' klayout \
+            | tee build-klayout-package.tsv
+
+      - name: Lint and self-test the research probe
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check research/ihp_klayout_drc_probe.py
+          ruff format --check research/ihp_klayout_drc_probe.py
+          python research/ihp_klayout_drc_probe.py self-test
+
+      - name: Locate the successful exact-head physical workflow
+        id: physical
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 900); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/openroad-physical-evidence.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number, .run_attempt)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if test -z "$run_id"; then
+              sleep 20
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if test "$status" = completed; then
+              if test "$conclusion" != success; then
+                echo "Exact-head physical workflow failed: $conclusion" >&2
+                echo "$html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'No successful exact-head physical workflow completed within the research gate.' >&2
+          exit 1
+
+      - name: Download the exact matched physical artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHYSICAL_RUN_ID: ${{ steps.physical.outputs.run_id }}
+        run: |
+          mkdir -p build/ihp-drc-probe/physical
+          gh run download "$PHYSICAL_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-openroad-physical-evidence \
+            --dir build/ihp-drc-probe/physical
+
+      - uses: actions/checkout@v4
+        with:
+          repository: IHP-GmbH/IHP-Open-PDK
+          ref: 22f2a25f1734796de3debbbf29cf697cbbc54081
+          path: build/ihp-drc-probe/ihp-open-pdk
+          fetch-depth: 1
+
+      - name: Run the six-case official-deck research matrix
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          PHYSICAL_RUN_ID: ${{ steps.physical.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          test "$(git -C build/ihp-drc-probe/ihp-open-pdk rev-parse HEAD)" = \
+            22f2a25f1734796de3debbbf29cf697cbbc54081
+          python research/ihp_klayout_drc_probe.py run \
+            --physical build/ihp-drc-probe/physical \
+            --pdk build/ihp-drc-probe/ihp-open-pdk \
+            --klayout "$(command -v klayout)" \
+            --out build/ihp-drc-probe/evidence \
+            --source-revision "$TARGET_SHA" \
+            --upstream-run-id "$PHYSICAL_RUN_ID" \
+            --timeout 1200
+          cp build-klayout-policy.txt \
+            build/ihp-drc-probe/evidence/apt-policy.txt
+          cp build-klayout-version.txt \
+            build/ihp-drc-probe/evidence/klayout-version-runner.txt
+          cp build-klayout-package.tsv \
+            build/ihp-drc-probe/evidence/klayout-package.tsv
+
+      - name: Validate the research-only claim boundary
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          PHYSICAL_RUN_ID: ${{ steps.physical.outputs.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              Path(
+                  'build/ihp-drc-probe/evidence/research-result.json'
+              ).read_text(encoding='utf-8')
+          )
+          assert result['schema'] == 'hephaestus.research.ihp-klayout-drc-probe.v1'
+          assert result['execution']['source_revision'] == os.environ['TARGET_SHA']
+          assert result['execution']['upstream_physical_workflow_run_id'] == (
+              os.environ['PHYSICAL_RUN_ID']
+          )
+          assert result['toolchain']['ihp_open_pdk_commit'] == (
+              '22f2a25f1734796de3debbbf29cf697cbbc54081'
+          )
+          assert len(result['matrix']) == 6
+          assert all(
+              value['negative']['detected']
+              for value in result['matrix'].values()
+          )
+          assert result['claims']['research_probe_completed'] is True
+          assert result['claims']['official_ihp_open_drc_deck_executed'] is True
+          assert result['claims']['all_six_exact_routed_gds_files_bound'] is True
+          assert result['claims']['all_six_positive_report_databases_parsed'] is True
+          assert result['claims']['all_six_geometry_controls_executed'] is True
+          assert result['claims']['geometry_corruption_detected'] is True
+          assert result['claims']['open_minimal_drc_qualified'] is False
+          assert result['claims']['drc_clean'] is False
+          assert result['claims']['foundry_signoff_drc_clean'] is False
+          assert result['claims']['foundry_signoff_complete'] is False
+          assert result['claims']['silicon_verified'] is False
+          PY
+
+      - name: Upload diagnostics after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-research-ihp-klayout-drc-failure-${{ github.run_attempt }}
+          path: build/ihp-drc-probe
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the research evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-research-ihp-klayout-drc-probe
+          path: build/ihp-drc-probe/evidence
+          if-no-files-found: error
+          retention-days: 30
