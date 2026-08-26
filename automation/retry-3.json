@@ -1,0 +1,4 @@
+{
+  "reason": "Start one uninterrupted PVT finalizer lifecycle across trigger verification and trigger removal.",
+  "pr": 42
+}
