@@ -71,10 +71,36 @@ the PDK commit, Liberty Git objects and SHA-256 values, and the OpenSTA tool
 manifest. All manifest-derived paths are relative, root-confined, and symlink
 free.
 
+## Timing-completeness contract
+
+Every OpenSTA execution emits and reparses an explicit report schema. A positive
+analysis is rejected unless all of the following hold:
+
+- the pinned OpenSTA `check_setup` command returns success;
+- at least one clock exists after loading the exact SDC;
+- at least one maximum-delay timing path exists;
+- `report_parasitic_annotation` reports zero unannotated drivers;
+- it also reports zero partially unannotated drivers;
+- exactly one worst-setup-slack summary and one maximum TNS summary are present;
+- slack sign, status, and total-negative-slack behavior are mutually consistent;
+- the completion and exact corner markers are present;
+- OpenSTA returns zero and emits no fatal diagnostic.
+
+The script uses the non-deprecated `report_checks` path-count options from the
+pinned OpenSTA source. Ordinary tool warnings are preserved in the raw logs and
+are not blanket-normalized away; setup completeness is decided by the explicit
+`check_setup` result and the machine-readable invariants above.
+
+These checks establish complete annotation and timing coverage under this exact
+OpenSTA/SPEF/SDC contract. They do not establish crosstalk-aware delay,
+variation-aware sign-off, or foundry sign-off.
+
 ## Repeatability contract
 
 For each routed physical attempt and corner, two OpenSTA executions must produce
-identical worst setup slack, status, and total negative slack to `1e-9 ns`.
+identical worst setup slack, status, total negative slack, setup-check result,
+clock/path counts, and SPEF annotation counts. Floating timing values must agree
+to `1e-9 ns`; the discrete coverage fields must match exactly.
 
 The two independently generated physical attempts for each backend must then
 produce the same timing metrics at every corner. This second comparison is
@@ -91,6 +117,7 @@ control with a `0.05 ns` period.
 A control qualifies only when:
 
 - OpenSTA completes successfully;
+- the same setup, clock/path, and SPEF-annotation checks pass;
 - the raw report replays successfully;
 - worst setup slack is negative;
 - total negative slack is negative;
@@ -106,14 +133,20 @@ The versioned reference pins stable technical observations:
 - PDK and OpenSTA source commits;
 - Liberty SHA-256 values;
 - routed Verilog, SDC, and date-normalized SPEF digests;
-- per-backend, per-physical-attempt, per-corner timing metrics;
+- per-backend, per-physical-attempt, per-corner timing and coverage metrics;
 - replay counts and tight-clock control behavior;
 - the exact claim boundary.
 
-It deliberately excludes GitHub run IDs, artifact IDs, runner paths, raw log
-hashes, execution timestamps, and the OpenSTA binary hash because the current
-build manifest explicitly does not claim bit-reproducible compiler output.
-The binary hash remains preserved in every full evidence artifact.
+A reference can be created only from an exact bootstrap artifact in which
+`comparative_pvt_claim_enabled` is still false. The bootstrap claim dictionary
+must match the supported key set exactly; missing, injected, or prematurely
+promoted claims are rejected. Strict validation records the final claim boundary
+only after the stable projection matches.
+
+The reference deliberately excludes GitHub run IDs, artifact IDs, runner paths,
+raw log hashes, execution timestamps, and the OpenSTA binary hash because the
+current build manifest explicitly does not claim bit-reproducible compiler
+output. The binary hash remains preserved in every full evidence artifact.
 
 ## Claim boundary
 
@@ -168,4 +201,5 @@ python -m hephaestus.pvt_corner run \
 ```
 
 Until the bootstrap artifact has been independently inspected and the versioned
-reference has been committed, `comparative_pvt_claim_enabled` remains false.
+reference has been committed, the workflow omits `--reference` and
+`comparative_pvt_claim_enabled` remains false.
