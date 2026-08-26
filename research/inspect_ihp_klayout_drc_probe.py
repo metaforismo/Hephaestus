@@ -141,9 +141,7 @@ def inspect(
     root = safe_root(artifact_root)
     result_files = list(root.rglob("research-result.json"))
     if len(result_files) != 1:
-        raise InspectionError(
-            f"expected one research-result.json, found {len(result_files)}"
-        )
+        raise InspectionError(f"expected one research-result.json, found {len(result_files)}")
     result_path = result_files[0]
     evidence_root = result_path.parent
     result = load_object(result_path)
@@ -191,9 +189,7 @@ def inspect(
 
     matrix = result.get("matrix")
     expected_labels = {
-        f"{backend}-attempt-{attempt}"
-        for backend in BACKENDS
-        for attempt in ATTEMPTS
+        f"{backend}-attempt-{attempt}" for backend in BACKENDS for attempt in ATTEMPTS
     }
     if not isinstance(matrix, dict) or set(matrix) != expected_labels:
         raise InspectionError("DRC research matrix differs from six matched cases")
@@ -269,9 +265,7 @@ def inspect(
         positive_counts[label] = replayed_positive["item_count"]
         negative_counts[label] = replayed_negative["item_count"]
         positive_empty = positive_empty and replayed_positive["item_count"] == 0
-        strict_increase = (
-            replayed_negative["item_count"] > replayed_positive["item_count"]
-        )
+        strict_increase = replayed_negative["item_count"] > replayed_positive["item_count"]
         controls_strictly_increased = controls_strictly_increased and strict_increase
         if negative_record.get("detected") is not True:
             raise InspectionError(f"negative control was not recorded as detected: {label}")
