@@ -1,0 +1,254 @@
+name: Bootstrap inspected PVT regression reference
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+concurrency:
+  group: pvt-reference-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  promote-reference:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the reviewed PVT implementation
+        run: python -m pip install -e '.[dev]'
+
+      - name: Wait for the successful bootstrap PVT artifact on this exact SHA
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 540); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/pvt-corner-evidence.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[]
+                | select(.head_sha == $sha)
+                | select(.name == "Routed IHP PVT corner evidence")]
+              | sort_by(.run_number)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if [ -z "$run_id" ]; then
+              sleep 30
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if [ "$status" = completed ]; then
+              if [ "$conclusion" != success ]; then
+                echo "Exact-head PVT bootstrap failed: $conclusion" >&2
+                echo "$html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "No successful exact-head PVT bootstrap completed within the gate." >&2
+          exit 1
+
+      - name: Download the exact bootstrap artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-pvt-corner-bootstrap \
+            --dir build/pvt-reference/bootstrap
+          test "$(find build/pvt-reference/bootstrap -name pvt_corner_evidence.json -type f | wc -l)" = 1
+
+      - name: Independently inspect the bootstrap boundary
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('build/pvt-reference/bootstrap')
+          manifests = list(root.rglob('pvt_corner_evidence.json'))
+          assert len(manifests) == 1
+          path = manifests[0]
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.ihp-pvt-corner-evidence.v2'
+          assert evidence['evidence_level'] == (
+              'routed_spef_opensta_three_corner_characterization'
+          )
+          assert evidence['execution']['source_revision'] == os.environ['TARGET_SHA']
+          assert evidence['execution']['upstream_physical_workflow_run_id']
+          assert evidence['regression'] == {
+              'bootstrap_reference_required': True,
+              'passed': False,
+          }
+          claims = evidence['claims']
+          for name in (
+              'all_36_positive_analyses_completed',
+              'analysis_replay_repeatability_verified',
+              'physical_attempt_timing_repeatability_verified',
+              'six_tight_clock_negative_controls_detected',
+              'raw_report_replay_verified',
+              'multi_corner_timing_observed',
+          ):
+              assert claims[name] is True
+          assert claims['comparative_pvt_claim_enabled'] is False
+          for name in (
+              'ocv_analyzed',
+              'aocv_analyzed',
+              'pocv_analyzed',
+              'statistical_variation_analyzed',
+              'crosstalk_delay_analyzed',
+              'ir_drop_analyzed',
+              'electromigration_analyzed',
+              'thermal_analyzed',
+              'foundry_signoff_sta_performed',
+              'foundry_signoff_complete',
+              'silicon_verified',
+          ):
+              assert claims[name] is False
+
+          positives = 0
+          controls = 0
+          digest_checks = 0
+          for backend, backend_value in evidence['backends'].items():
+              assert backend in {
+                  'shared_dag',
+                  'naive_shift_add',
+                  'constant_multipliers',
+              }
+              assert backend_value[
+                  'physical_attempt_timing_repeatability_verified'
+              ] is True
+              assert set(backend_value['physical_attempts']) == {'1', '2'}
+              for attempt, case in backend_value['physical_attempts'].items():
+                  assert set(case['corners']) == {'slow', 'typ', 'fast'}
+                  for corner, corner_value in case['corners'].items():
+                      assert len(corner_value['replays']) == 2
+                      assert corner_value[
+                          'analysis_replay_repeatability_verified'
+                      ] is True
+                      assert corner_value['raw_report_replay_verified'] is True
+                      positives += len(corner_value['replays'])
+                      case_root = (
+                          path.parent
+                          / 'backends'
+                          / backend
+                          / f'physical-attempt-{attempt}'
+                          / 'corners'
+                          / corner
+                      )
+                      for replay in corner_value['replays']:
+                          replay_root = case_root / f"replay-{replay['replay']}"
+                          for file_key, digest_key in (
+                              ('script', 'script_sha256'),
+                              ('stdout', 'stdout_sha256'),
+                              ('stderr', 'stderr_sha256'),
+                              ('returncode_file', 'returncode_file_sha256'),
+                          ):
+                              candidate = replay_root / replay[file_key]
+                              assert candidate.is_file() and not candidate.is_symlink()
+                              assert hashlib.sha256(candidate.read_bytes()).hexdigest() == (
+                                  replay[digest_key]
+                              )
+                              digest_checks += 1
+                  control = case['negative_control']
+                  assert control['timing_violation_observed'] is True
+                  assert control['analysis']['metrics']['worst_setup_slack_ns'] < 0
+                  assert control['analysis']['metrics']['total_negative_slack_ns'] < 0
+                  controls += 1
+          assert positives == 36
+          assert controls == 6
+          assert digest_checks == 144
+          Path('build/pvt-reference/inspection.json').write_text(
+              json.dumps(
+                  {
+                      'schema': 'hephaestus.pvt-bootstrap-inspection.v1',
+                      'source_revision': os.environ['TARGET_SHA'],
+                      'upstream_pvt_run_id': os.environ['UPSTREAM_RUN_ID'],
+                      'manifest_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                      'positive_analyses': positives,
+                      'negative_controls': controls,
+                      'raw_report_digest_checks': digest_checks,
+                      'passed': True,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Generate and validate the versioned reference
+        run: |
+          set -euo pipefail
+          manifest=$(find build/pvt-reference/bootstrap \
+            -name pvt_corner_evidence.json -type f -print -quit)
+          mkdir -p benchmarks/reference
+          test ! -e benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          python -m hephaestus.pvt_corner reference \
+            "$manifest" \
+            --out benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          python -m hephaestus.pvt_corner validate-reference \
+            "$manifest" \
+            benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          ruff check src/hephaestus/pvt_corner tests/test_pvt_corner.py
+          ruff format --check src/hephaestus/pvt_corner tests/test_pvt_corner.py
+          pytest tests/test_pvt_corner.py
+          git diff --check
+
+      - name: Commit only the inspected regression reference
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = \
+            benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          git commit -m 'test: pin inspected routed PVT regression reference'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
+
+      - name: Upload the independent bootstrap inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pvt-bootstrap-independent-inspection
+          path: build/pvt-reference/inspection.json
+          if-no-files-found: error
+          retention-days: 30

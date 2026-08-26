@@ -1,0 +1,5 @@
+{
+  "schema": "hephaestus.temporary-pvt-ci-trigger.v1",
+  "purpose": "Trigger user-authored exact-head CI after inspected reference and documentation promotion.",
+  "must_be_removed_before_merge": true
+}
