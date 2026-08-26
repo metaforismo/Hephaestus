@@ -1,0 +1,243 @@
+name: Routed IHP PVT corner evidence
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install, lint, and test the PVT evidence builder
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          ruff format --check \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          pytest tests/test_pvt_corner.py
+          python -m hephaestus.pvt_corner --help
+
+  qualify:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Locate the successful exact-head physical workflow run
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_EVENT: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 480); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/openroad-physical-evidence.yml/runs" \
+              -f event="$UPSTREAM_EVENT" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if [ -z "$run_id" ]; then
+              sleep 30
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if [ "$status" = completed ]; then
+              if [ "$conclusion" != success ]; then
+                echo "Exact-head physical workflow ended with: $conclusion" >&2
+                echo "Upstream run: $html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              echo "Qualified upstream run: $html_url"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "No successful exact-head physical workflow completed within the gate." >&2
+          exit 1
+
+      - name: Download the same-run physical and post-physical artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-openroad-physical-evidence \
+            --dir build/pvt/physical
+          gh run download "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-post-physical-equivalence-evidence \
+            --dir build/pvt/post-physical
+
+      - uses: actions/checkout@v4
+        with:
+          repository: IHP-GmbH/IHP-Open-PDK
+          ref: 22f2a25f1734796de3debbbf29cf697cbbc54081
+          path: build/pvt/ihp-open-pdk
+          fetch-depth: 1
+          sparse-checkout: |
+            ihp-sg13g2/libs.ref/sg13g2_stdcell/lib
+          sparse-checkout-cone-mode: false
+
+      - name: Install the pinned OpenSTA build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            cmake \
+            curl \
+            flex \
+            git \
+            'iverilog=12.0-2build2' \
+            libeigen3-dev \
+            libfl-dev \
+            libfmt-dev \
+            libtool \
+            libz-dev \
+            swig \
+            tcl-dev \
+            'yosys=0.33-5build2' \
+            'yosys-abc=0.33-5build2'
+
+      - name: Build the captured OpenSTA binary
+        run: bash scripts/build_pinned_opensta.sh build/pvt/opensta
+
+      - name: Install Hephaestus
+        run: python -m pip install -e .
+
+      - name: Run the complete bootstrap PVT matrix
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          python -m hephaestus.pvt_corner run \
+            build/pvt/physical \
+            build/pvt/post-physical \
+            --pdk build/pvt/ihp-open-pdk \
+            --opensta build/pvt/opensta/opensta.bin \
+            --opensta-manifest build/pvt/opensta/tool.json \
+            --contract configs/evidence/ihp_sg13g2_pvt_corner_v2.json \
+            --out build/pvt/evidence \
+            --source-revision "$TARGET_SHA" \
+            --upstream-run-id "$UPSTREAM_RUN_ID"
+
+      - name: Validate the bootstrap claim boundary
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path('build/pvt/evidence/pvt_corner_evidence.json')
+          evidence = json.loads(path.read_text(encoding='utf-8'))
+          assert evidence['schema'] == 'hephaestus.ihp-pvt-corner-evidence.v2'
+          assert evidence['evidence_level'] == (
+              'routed_spef_opensta_three_corner_characterization'
+          )
+          assert evidence['execution']['source_revision'] == os.environ['TARGET_SHA']
+          assert evidence['execution']['upstream_physical_workflow_run_id'] == (
+              os.environ['UPSTREAM_RUN_ID']
+          )
+          assert set(evidence['backends']) == {
+              'shared_dag',
+              'naive_shift_add',
+              'constant_multipliers',
+          }
+          positive = 0
+          controls = 0
+          for backend in evidence['backends'].values():
+              assert backend['physical_attempt_timing_repeatability_verified']
+              assert set(backend['physical_attempts']) == {'1', '2'}
+              for case in backend['physical_attempts'].values():
+                  assert set(case['corners']) == {'slow', 'typ', 'fast'}
+                  for corner in case['corners'].values():
+                      assert corner['analysis_replay_repeatability_verified']
+                      assert corner['raw_report_replay_verified']
+                      assert len(corner['replays']) == 2
+                      positive += len(corner['replays'])
+                  assert case['negative_control']['timing_violation_observed']
+                  controls += 1
+          assert positive == 36
+          assert controls == 6
+          assert evidence['regression'] == {
+              'passed': False,
+              'bootstrap_reference_required': True,
+          }
+          assert evidence['claims']['comparative_pvt_claim_enabled'] is False
+          assert evidence['claims']['multi_corner_timing_observed'] is True
+          assert evidence['claims']['foundry_signoff_sta_performed'] is False
+          assert evidence['claims']['foundry_signoff_complete'] is False
+          assert evidence['claims']['silicon_verified'] is False
+          PY
+
+      - name: Upload diagnostics after a failed qualification
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-pvt-corner-failure-${{ github.run_attempt }}
+          path: build/pvt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the inspected-reference bootstrap candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-pvt-corner-bootstrap
+          path: build/pvt/evidence
+          if-no-files-found: error
+          retention-days: 30
