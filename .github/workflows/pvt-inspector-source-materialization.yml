@@ -1,0 +1,66 @@
+name: PVT inspector source materialization
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Format, lint, and test the independent inspector
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          ruff check --fix \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          ruff format \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          ruff check \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          ruff format --check \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          pytest tests/test_inspect_pvt_artifact.py
+          python scripts/inspect_pvt_artifact.py --help
+          find scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf .pytest_cache
+          git diff --check
+
+      - name: Commit only canonical source formatting
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          if git diff --cached --quiet; then
+            echo 'Inspector source was already canonical.'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m 'style: canonicalize PVT artifact inspector'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
