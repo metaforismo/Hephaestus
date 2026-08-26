@@ -7,10 +7,11 @@ from typing import Any
 
 from ._builder import (
     build_evidence as _build_evidence,
-    build_reference,
-    validate_existing_reference,
+    build_reference as _build_reference,
+    validate_existing_reference as _validate_existing_reference,
 )
 from ._common import PVTCornerError
+from ._inspection import inspect_evidence_artifact
 from ._opensta import emit_opensta_script, parse_opensta_output, tighten_sdc
 from ._provenance import validate_upstream_run_binding
 from ._source import validate_contract, validate_source_chain
@@ -46,11 +47,36 @@ def build_evidence(
     )
 
 
+def build_reference(
+    evidence_path: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    """Create a reference only after replaying the entire bootstrap artifact."""
+
+    inspect_evidence_artifact(
+        evidence_path,
+        allowed_comparative_values=(False,),
+        require_bootstrap=True,
+    )
+    return _build_reference(evidence_path, output_path)
+
+
+def validate_existing_reference(
+    evidence_path: str | Path,
+    reference_path: str | Path,
+) -> dict[str, Any]:
+    """Replay an artifact before checking its stable reference projection."""
+
+    inspect_evidence_artifact(evidence_path)
+    return _validate_existing_reference(evidence_path, reference_path)
+
+
 __all__ = [
     "PVTCornerError",
     "build_evidence",
     "build_reference",
     "emit_opensta_script",
+    "inspect_evidence_artifact",
     "parse_opensta_output",
     "tighten_sdc",
     "validate_contract",
