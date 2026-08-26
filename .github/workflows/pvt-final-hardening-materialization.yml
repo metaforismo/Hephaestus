@@ -1,0 +1,374 @@
+name: PVT final hardening materialization
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Materialize the final fail-closed boundary
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f'cannot locate patch marker in {path}: {old!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          opensta = Path('src/hephaestus/pvt_corner/_opensta.py')
+          text = opensta.read_text(encoding='utf-8')
+          old = '''_FATAL_RE = re.compile(r"(?m)^\\s*(?:Error:|%Error|FATAL:)")'''
+          new = '''_DIAGNOSTIC_RE = re.compile(
+              r"(?m)^\\s*(?:Warning:|%Warning|Error:|%Error|FATAL:).*$"
+          )'''
+          if '_DIAGNOSTIC_RE = re.compile(' not in text:
+              if old not in text:
+                  raise SystemExit('cannot locate OpenSTA diagnostic regex')
+              text = text.replace(old, new, 1)
+          old = '''    fatal = _FATAL_RE.search(combined)
+              if fatal is not None:
+                  line = combined[fatal.start() :].splitlines()[0]
+                  raise PVTCornerError(f"OpenSTA reported a fatal diagnostic: {line}")
+          '''
+          old = '\n'.join(line[4:] if line.startswith('    ') else line for line in old.splitlines())
+          new = '''    diagnostic = _DIAGNOSTIC_RE.search(combined)
+              if diagnostic is not None:
+                  raise PVTCornerError(
+                      "OpenSTA reported a diagnostic: " + diagnostic.group(0).strip()
+                  )
+          '''
+          new = '\n'.join(line[4:] if line.startswith('    ') else line for line in new.splitlines())
+          if 'OpenSTA reported a diagnostic:' not in text:
+              if old not in text:
+                  raise SystemExit('cannot locate OpenSTA fatal-diagnostic block')
+              text = text.replace(old, new, 1)
+          opensta.write_text(text, encoding='utf-8')
+
+          source = Path('src/hephaestus/pvt_corner/_source.py')
+          text = source.read_text(encoding='utf-8')
+          required_marker = '''        "thermal_analyzed",
+                  "foundry_signoff_sta_performed",'''
+          required_replacement = '''        "thermal_analyzed",
+                  "corner_specific_parasitic_extraction_performed",
+                  "interconnect_rc_variation_analyzed",
+                  "foundry_signoff_sta_performed",'''
+          if '"corner_specific_parasitic_extraction_performed",' not in text:
+              if required_marker not in text:
+                  raise SystemExit('cannot locate PVT contract false-claim tuple')
+              text = text.replace(required_marker, required_replacement, 1)
+
+          helper_marker = '''def _validate_pdk(
+              pdk_root: Path,
+              contract: dict[str, Any],
+          ) -> dict[str, Any]:
+          '''
+          helper_marker = '\n'.join(
+              line[0:] if not line.startswith('          ') else line[10:]
+              for line in helper_marker.splitlines()
+          )
+          helper = '''def _normalize_repository_url(value: str) -> str:
+              normalized = value.strip().rstrip("/")
+              if normalized.startswith("git@github.com:"):
+                  normalized = "https://github.com/" + normalized.removeprefix(
+                      "git@github.com:"
+                  )
+              if normalized.endswith(".git"):
+                  normalized = normalized[:-4]
+              return normalized.lower()
+
+
+          def _validate_pdk(
+              pdk_root: Path,
+              contract: dict[str, Any],
+          ) -> dict[str, Any]:
+          '''
+          helper = '\n'.join(
+              line[0:] if not line.startswith('          ') else line[10:]
+              for line in helper.splitlines()
+          )
+          if 'def _normalize_repository_url(' not in text:
+              if helper_marker not in text:
+                  raise SystemExit('cannot locate PDK validator')
+              text = text.replace(helper_marker, helper, 1)
+
+          commit_block = '''    expected_commit = contract["ihp_open_pdk"]["commit"]
+              if actual_commit != expected_commit:
+                  raise PVTCornerError(
+                      f"PDK checkout differs: expected {expected_commit}, got {actual_commit}"
+                  )
+              liberties: dict[str, Any] = {}
+          '''
+          commit_block = '\n'.join(
+              line[4:] if line.startswith('    ') else line
+              for line in commit_block.splitlines()
+          )
+          remote_block = '''    expected_commit = contract["ihp_open_pdk"]["commit"]
+              if actual_commit != expected_commit:
+                  raise PVTCornerError(
+                      f"PDK checkout differs: expected {expected_commit}, got {actual_commit}"
+                  )
+              expected_repository = require_string(
+                  contract["ihp_open_pdk"].get("repository"),
+                  context="PDK repository",
+              )
+              actual_repository = _git_value(
+                  pdk_root,
+                  "remote",
+                  "get-url",
+                  "origin",
+                  context="PDK origin repository",
+              )
+              if _normalize_repository_url(actual_repository) != _normalize_repository_url(
+                  expected_repository
+              ):
+                  raise PVTCornerError(
+                      "PDK origin repository differs: "
+                      f"expected {expected_repository}, got {actual_repository}"
+                  )
+              liberties: dict[str, Any] = {}
+          '''
+          remote_block = '\n'.join(
+              line[4:] if line.startswith('    ') else line
+              for line in remote_block.splitlines()
+          )
+          if 'PDK origin repository differs:' not in text:
+              if commit_block not in text:
+                  raise SystemExit('cannot locate PDK commit validation block')
+              text = text.replace(commit_block, remote_block, 1)
+          source.write_text(text, encoding='utf-8')
+
+          reference_module = Path('src/hephaestus/pvt_corner/_reference.py')
+          text = reference_module.read_text(encoding='utf-8')
+          marker = '''            "thermal_analyzed": False,
+                      "foundry_signoff_sta_performed": False,'''
+          replacement = '''            "thermal_analyzed": False,
+                      "corner_specific_parasitic_extraction_performed": False,
+                      "interconnect_rc_variation_analyzed": False,
+                      "foundry_signoff_sta_performed": False,'''
+          if '"corner_specific_parasitic_extraction_performed": False,' not in text:
+              if marker not in text:
+                  raise SystemExit('cannot locate PVT reference claim boundary')
+              text = text.replace(marker, replacement, 1)
+          reference_module.write_text(text, encoding='utf-8')
+
+          contract_path = Path('configs/evidence/ihp_sg13g2_pvt_corner_v2.json')
+          contract = json.loads(contract_path.read_text(encoding='utf-8'))
+          boundary = contract['claim_boundary']
+          boundary['corner_specific_parasitic_extraction_performed'] = False
+          boundary['interconnect_rc_variation_analyzed'] = False
+          contract_path.write_text(
+              json.dumps(contract, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+
+          reference_path = Path(
+              'benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json'
+          )
+          reference = json.loads(reference_path.read_text(encoding='utf-8'))
+          reference_boundary = reference['stable_projection']['claim_boundary']
+          reference_boundary['corner_specific_parasitic_extraction_performed'] = False
+          reference_boundary['interconnect_rc_variation_analyzed'] = False
+          reference_path.write_text(
+              json.dumps(reference, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+
+          inspector = Path('scripts/inspect_pvt_artifact.py')
+          text = inspector.read_text(encoding='utf-8')
+          marker = '''        "thermal_analyzed",
+                  "foundry_signoff_sta_performed",'''
+          replacement = '''        "thermal_analyzed",
+                  "corner_specific_parasitic_extraction_performed",
+                  "interconnect_rc_variation_analyzed",
+                  "foundry_signoff_sta_performed",'''
+          if '"corner_specific_parasitic_extraction_performed",' not in text:
+              if marker not in text:
+                  raise SystemExit('cannot locate inspector false-claim tuple')
+              text = text.replace(marker, replacement, 1)
+          inspector.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/pvt-corner-evidence.yml')
+          text = workflow.read_text(encoding='utf-8')
+          marker = '''              'thermal_analyzed': False,
+                        'foundry_signoff_sta_performed': False,'''
+          replacement = '''              'thermal_analyzed': False,
+                        'corner_specific_parasitic_extraction_performed': False,
+                        'interconnect_rc_variation_analyzed': False,
+                        'foundry_signoff_sta_performed': False,'''
+          if 'corner_specific_parasitic_extraction_performed' not in text:
+              if marker not in text:
+                  raise SystemExit('cannot locate workflow claim-boundary assertion')
+              text = text.replace(marker, replacement, 1)
+          workflow.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_pvt_corner.py')
+          text = tests.read_text(encoding='utf-8')
+          fixture_marker = '''                "thermal_analyzed": False,
+                          "foundry_signoff_sta_performed": False,'''
+          fixture_replacement = '''                "thermal_analyzed": False,
+                          "corner_specific_parasitic_extraction_performed": False,
+                          "interconnect_rc_variation_analyzed": False,
+                          "foundry_signoff_sta_performed": False,'''
+          if '"corner_specific_parasitic_extraction_performed": False,' not in text:
+              if fixture_marker not in text:
+                  raise SystemExit('cannot locate test fixture claim boundary')
+              text = text.replace(fixture_marker, fixture_replacement, 1)
+          if 'git remote add origin' not in text:
+              marker = '''    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+              '''
+              replacement = '''    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+                  subprocess.run(
+                      [
+                          "git",
+                          "remote",
+                          "add",
+                          "origin",
+                          "https://example.invalid/pdk.git",
+                      ],
+                      cwd=root,
+                      check=True,
+                  )
+              '''
+              marker = '\n'.join(
+                  line[4:] if line.startswith('    ') else line for line in marker.splitlines()
+              )
+              replacement = '\n'.join(
+                  line[4:] if line.startswith('    ') else line
+                  for line in replacement.splitlines()
+              )
+              if marker not in text:
+                  raise SystemExit('cannot locate test PDK init')
+              text = text.replace(marker, replacement, 1)
+          if 'test_opensta_parser_rejects_warnings' not in text:
+              text += '''
+
+          def test_opensta_parser_rejects_warnings() -> None:
+              stdout = "\\n".join(
+                  [
+                      "HEPHAESTUS_PVT_CORNER=typ",
+                      "Warning: unconstrained endpoint",
+                      "0.5 slack (MET)",
+                      "tns 0.0",
+                      "HEPHAESTUS_PVT_DONE=1",
+                  ]
+              )
+
+              with pytest.raises(pvt_corner.PVTCornerError, match="reported a diagnostic"):
+                  _opensta.parse_opensta_output(stdout, "", expected_label="typ")
+
+
+          def test_pdk_validator_rejects_another_origin(tmp_path: Path) -> None:
+              values = _fixture(tmp_path)
+              contract = json.loads(values["contract"].read_text(encoding="utf-8"))
+              subprocess.run(
+                  [
+                      "git",
+                      "remote",
+                      "set-url",
+                      "origin",
+                      "https://evil.invalid/pdk.git",
+                  ],
+                  cwd=values["pdk"],
+                  check=True,
+              )
+
+              with pytest.raises(pvt_corner.PVTCornerError, match="origin repository differs"):
+                  from hephaestus.pvt_corner import _source
+
+                  _source._validate_pdk(values["pdk"], contract)
+          '''
+              text = '\n'.join(
+                  line[10:] if line.startswith('          ') else line
+                  for line in text.splitlines()
+              ) + '\n'
+          tests.write_text(text, encoding='utf-8')
+
+          for path in (
+              Path('README.md'),
+              Path('docs/PVT_CORNER_EVIDENCE.md'),
+              Path('docs/POST_PHYSICAL_STATUS.md'),
+              Path('docs/ROADMAP.md'),
+              Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md'),
+          ):
+              text = path.read_text(encoding='utf-8')
+              if 'corner-specific parasitic extraction' in text:
+                  continue
+              note = (
+                  '\n\n> **Interconnect corner boundary:** all three analyses reuse the exact '
+                  'routed SPEF bound to each physical attempt. The layer varies the '
+                  'official standard-cell Liberty view; it does not perform '
+                  'corner-specific parasitic extraction or model interconnect RC '
+                  'variation.\n'
+              )
+              path.write_text(text.rstrip() + note, encoding='utf-8')
+          PY
+
+      - name: Format, lint, test, and verify the final boundary
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          targets=(
+            src/hephaestus/pvt_corner
+            scripts/inspect_pvt_artifact.py
+            tests/test_pvt_corner.py
+            tests/test_inspect_pvt_artifact.py
+          )
+          ruff format "${targets[@]}"
+          ruff check --fix "${targets[@]}"
+          ruff format "${targets[@]}"
+          ruff check "${targets[@]}"
+          ruff format --check "${targets[@]}"
+          pytest tests/test_pvt_corner.py tests/test_inspect_pvt_artifact.py
+          python -m hephaestus.pvt_corner --help
+          python scripts/inspect_pvt_artifact.py --help
+          python scripts/check_repo_hygiene.py
+          find src scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf .pytest_cache
+          git diff --check
+
+      - name: Commit only permanent PVT hardening
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            .github/workflows/pvt-corner-evidence.yml \
+            benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json \
+            configs/evidence/ihp_sg13g2_pvt_corner_v2.json \
+            README.md \
+            docs/PVT_CORNER_EVIDENCE.md \
+            docs/POST_PHYSICAL_STATUS.md \
+            docs/ROADMAP.md \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md \
+            scripts/inspect_pvt_artifact.py \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py \
+            tests/test_inspect_pvt_artifact.py
+          git diff --cached --check
+          git commit -m 'security: harden routed PVT evidence boundary'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence

@@ -1,0 +1,68 @@
+{
+  "analysis_replays": [
+    1,
+    2
+  ],
+  "backends": [
+    "shared_dag",
+    "naive_shift_add",
+    "constant_multipliers"
+  ],
+  "claim_boundary": {
+    "aocv_analyzed": false,
+    "crosstalk_delay_analyzed": false,
+    "electromigration_analyzed": false,
+    "foundry_signoff_complete": false,
+    "foundry_signoff_sta_performed": false,
+    "ir_drop_analyzed": false,
+    "ocv_analyzed": false,
+    "pocv_analyzed": false,
+    "silicon_verified": false,
+    "statistical_variation_analyzed": false,
+    "thermal_analyzed": false
+  },
+  "contract_id": "ihp-sg13g2-routed-pvt-corner-v2",
+  "corner_order": [
+    "slow",
+    "typ",
+    "fast"
+  ],
+  "ihp_open_pdk": {
+    "commit": "22f2a25f1734796de3debbbf29cf697cbbc54081",
+    "liberty": {
+      "slow": {
+        "git_blob_sha": "a8077d89a51e11cc41c5ef3fa437c5a59ab30eb7",
+        "nominal_temperature_c": 125.0,
+        "nominal_voltage_v": 1.08,
+        "path": "ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_slow_1p08V_125C.lib",
+        "sha256": "1ac6a0301184b3a8aa1a4a01910967f624c8e869517777f529985f11f04588c3"
+      },
+      "typ": {
+        "git_blob_sha": "6768e90d97ea01f229a2079fbc198ddf92796b5e",
+        "nominal_temperature_c": 25.0,
+        "nominal_voltage_v": 1.2,
+        "path": "ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_typ_1p20V_25C.lib",
+        "sha256": "7677a8918689f452e80405ad16a83e744709342574f2aedcc507c2758986b396"
+      },
+      "fast": {
+        "git_blob_sha": "55b7f7792f70ef0f57f967c674aa0f6fd1db27ba",
+        "nominal_temperature_c": -40.0,
+        "nominal_voltage_v": 1.32,
+        "path": "ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_fast_1p32V_m40C.lib",
+        "sha256": "f191a3132d0f2f59ca2721884cdb1d8360c8fbf3e0012056af62583dd69ae701"
+      }
+    },
+    "repository": "https://github.com/IHP-GmbH/IHP-Open-PDK.git"
+  },
+  "negative_control_clock_period_ns": 0.05,
+  "opensta": {
+    "commit": "2b751f0e8196b05ef4ed8246b7e27c63c967ec6d",
+    "repository": "parallaxsw/OpenSTA"
+  },
+  "physical_attempts": [
+    1,
+    2
+  ],
+  "schema": "hephaestus.ihp-pvt-corner-contract.v2",
+  "timeout_seconds": 600
+}

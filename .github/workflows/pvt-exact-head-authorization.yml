@@ -1,0 +1,259 @@
+name: PVT exact-head merge authorization
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+concurrency:
+  group: pvt-exact-head-merge-authorization
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  authorize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Verify the clean candidate tree
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -f benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json
+          test -f .github/workflows/pvt-corner-evidence.yml
+          test -f .github/workflows/pvt-artifact-inspection.yml
+          test -f .github/workflows/pvt-exact-head-authorization.yml
+          for path in \
+            .github/workflows/pvt-reference-materialization.yml \
+            .github/workflows/pvt-inspector-source-materialization.yml \
+            .github/workflows/pvt-path-hardening-materialization.yml \
+            .github/workflows/pvt-documentation-materialization.yml \
+            .github/workflows/pvt-final-hardening-materialization.yml
+          do
+            test ! -e "$path"
+          done
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --exit-code
+          git status --porcelain | test ! -s /dev/stdin
+
+      - name: Run independent local source gates
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check .
+          ruff format --check .
+          pytest -q
+          python scripts/check_repo_hygiene.py
+          git diff --check
+
+      - name: Wait for all permanent exact-head workflows
+        id: gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/required.txt <<'EOF'
+          CI
+          Evidence
+          Formal equivalence
+          Matched baselines
+          Synthesis evidence
+          IHP mapped evidence
+          IHP mapped formal equivalence
+          IHP ABC area-delay evidence
+          IHP ABC area-delay formal equivalence
+          Pinned OpenSTA pre-layout timing evidence
+          Registered matched tiles
+          Pinned IHP OpenROAD physical evidence
+          Repository hygiene
+          Routed SPEF semantic evidence
+          Routed IHP PVT corner evidence
+          Independent routed PVT artifact inspection
+          EOF
+          sed -i 's/^          //' /tmp/required.txt
+
+          for _ in $(seq 1 960); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=100)
+            jq --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number, .run_attempt)
+              | group_by(.name)
+              | map(last)
+            ' <<<"$response" > /tmp/latest.json
+
+            missing=0
+            pending=0
+            failed=0
+            while IFS= read -r name; do
+              row=$(jq -c --arg name "$name" '.[] | select(.name == $name)' \
+                /tmp/latest.json)
+              if test -z "$row"; then
+                echo "missing: $name"
+                missing=$((missing + 1))
+                continue
+              fi
+              status=$(jq -r '.status' <<<"$row")
+              conclusion=$(jq -r '.conclusion // empty' <<<"$row")
+              url=$(jq -r '.html_url' <<<"$row")
+              if test "$status" != completed; then
+                echo "pending: $name ($status) $url"
+                pending=$((pending + 1))
+              elif test "$conclusion" != success; then
+                echo "failed: $name ($conclusion) $url" >&2
+                failed=$((failed + 1))
+              else
+                echo "success: $name $url"
+              fi
+            done < /tmp/required.txt
+
+            if test "$failed" -ne 0; then
+              exit 1
+            fi
+            if test "$missing" -eq 0 && test "$pending" -eq 0; then
+              pvt_run=$(jq -r '.[] | select(.name == "Routed IHP PVT corner evidence") | .id' \
+                /tmp/latest.json)
+              inspector_run=$(jq -r '.[] | select(.name == "Independent routed PVT artifact inspection") | .id' \
+                /tmp/latest.json)
+              test -n "$pvt_run"
+              test -n "$inspector_run"
+              echo "pvt_run_id=$pvt_run" >> "$GITHUB_OUTPUT"
+              echo "inspector_run_id=$inspector_run" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Exact-head workflow matrix did not complete within the bounded gate.' >&2
+          exit 1
+
+      - name: Download strict PVT and inspector artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PVT_RUN_ID: ${{ steps.gates.outputs.pvt_run_id }}
+          INSPECTOR_RUN_ID: ${{ steps.gates.outputs.inspector_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/pvt-authorization/pvt build/pvt-authorization/inspection
+          gh run download "$PVT_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-pvt-corner-evidence \
+            --dir build/pvt-authorization/pvt
+          gh run download "$INSPECTOR_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-ihp-pvt-artifact-inspection \
+            --dir build/pvt-authorization/inspection
+
+      - name: Validate the exact strict artifacts
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          pvt_files = list(
+              Path('build/pvt-authorization/pvt').rglob('pvt_corner_evidence.json')
+          )
+          inspection_files = list(
+              Path('build/pvt-authorization/inspection').rglob('inspection.json')
+          )
+          assert len(pvt_files) == 1, pvt_files
+          assert len(inspection_files) == 1, inspection_files
+          pvt = json.loads(pvt_files[0].read_text(encoding='utf-8'))
+          inspection = json.loads(inspection_files[0].read_text(encoding='utf-8'))
+          target = os.environ['TARGET_SHA']
+
+          assert pvt['schema'] == 'hephaestus.ihp-pvt-corner-evidence.v2'
+          assert pvt['execution']['source_revision'] == target
+          assert pvt['regression']['passed'] is True
+          assert pvt['claims']['comparative_pvt_claim_enabled'] is True
+          assert pvt['claims']['all_36_positive_analyses_completed'] is True
+          assert pvt['claims']['six_tight_clock_negative_controls_detected'] is True
+          assert pvt['claims']['raw_report_replay_verified'] is True
+          for name in (
+              'corner_specific_parasitic_extraction_performed',
+              'interconnect_rc_variation_analyzed',
+              'ocv_analyzed',
+              'aocv_analyzed',
+              'pocv_analyzed',
+              'statistical_variation_analyzed',
+              'crosstalk_delay_analyzed',
+              'ir_drop_analyzed',
+              'electromigration_analyzed',
+              'thermal_analyzed',
+              'foundry_signoff_sta_performed',
+              'foundry_signoff_complete',
+              'silicon_verified',
+          ):
+              assert pvt['claims'][name] is False, name
+
+          assert inspection['schema'] == (
+              'hephaestus.pvt-artifact-independent-inspection.v1'
+          )
+          assert inspection['source_revision'] == target
+          assert inspection['strict_reference_mode'] is True
+          assert inspection['positive_analyses_replayed'] == 36
+          assert inspection['negative_controls_replayed'] == 6
+          assert inspection['source_sha256_bindings_rechecked'] > 0
+          assert inspection['opensta_diagnostics_observed'] == 0
+          assert inspection['reference_validation']['passed'] is True
+          assert inspection['result'] == 'passed'
+          PY
+
+      - name: Verify PR head and publish the merge authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/42")
+          test "$(jq -r '.state' <<<"$pr")" = open
+          test "$(jq -r '.head.sha' <<<"$pr")" = "$TARGET_SHA"
+          existing=$(gh api "/repos/${GITHUB_REPOSITORY}/issues/42/comments?per_page=100" \
+            | jq -r --arg sha "$TARGET_SHA" \
+              '.[] | select(.body | contains("HEPHAESTUS_PVT_EXACT_HEAD_AUTHORIZED=" + $sha)) | .id' \
+            | head -n 1)
+          if test -n "$existing"; then
+            echo "Authorization already exists as comment $existing."
+            exit 0
+          fi
+          body=$(cat <<EOF
+          HEPHAESTUS_PVT_EXACT_HEAD_AUTHORIZED=$TARGET_SHA
+
+          Mechanical authorization summary:
+
+          - 16/16 permanent workflows succeeded on this exact head;
+          - strict routed PVT artifact passed its versioned reference;
+          - independent artifact inspector replayed 36 positive reports and 6 controls;
+          - zero OpenSTA warning/error diagnostics were accepted;
+          - local Ruff, formatting, full pytest, hygiene, and diff checks passed;
+          - no materialization workflow remains in the candidate tree;
+          - corner-specific parasitic extraction, interconnect RC variation, OCV/AOCV/POCV, crosstalk, power-integrity, sign-off, and silicon claims remain false.
+          EOF
+          )
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/42/comments" \
+            -f body="$body"

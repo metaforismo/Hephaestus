@@ -1,0 +1,303 @@
+name: PVT documentation materialization
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Derive documentation from the pinned PVT reference
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from pathlib import Path
+
+          reference_path = Path(
+              'benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json'
+          )
+          if not reference_path.is_file():
+              raise SystemExit('versioned PVT reference is missing')
+          reference = json.loads(reference_path.read_text(encoding='utf-8'))
+          if reference.get('schema') != 'hephaestus.ihp-pvt-corner-reference.v2':
+              raise SystemExit('unexpected PVT reference schema')
+          projection = reference['stable_projection']
+          if projection['claim_boundary'] != {
+              'comparative_pvt_claim_enabled': True,
+              'ocv_analyzed': False,
+              'aocv_analyzed': False,
+              'pocv_analyzed': False,
+              'statistical_variation_analyzed': False,
+              'crosstalk_delay_analyzed': False,
+              'ir_drop_analyzed': False,
+              'electromigration_analyzed': False,
+              'thermal_analyzed': False,
+              'foundry_signoff_sta_performed': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }:
+              raise SystemExit('PVT reference claim boundary differs')
+          reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
+          backends = ('shared_dag', 'naive_shift_add', 'constant_multipliers')
+          labels = {
+              'shared_dag': 'shared DAG',
+              'naive_shift_add': 'naive shift/add',
+              'constant_multipliers': 'constant multipliers',
+          }
+          rows = []
+          for backend in backends:
+              value = projection['backends'][backend]
+              attempts = value['physical_attempts']
+              for corner in ('slow', 'typ', 'fast'):
+                  first = attempts['1']['corners'][corner]['metrics']
+                  second = attempts['2']['corners'][corner]['metrics']
+                  if first != second:
+                      raise SystemExit(
+                          f'physical-attempt metrics differ for {backend}/{corner}'
+                      )
+              rows.append(
+                  '| {label} | {slow:.9g} | {typ:.9g} | {fast:.9g} |'.format(
+                      label=labels[backend],
+                      slow=attempts['1']['corners']['slow']['metrics'][
+                          'worst_setup_slack_ns'
+                      ],
+                      typ=attempts['1']['corners']['typ']['metrics'][
+                          'worst_setup_slack_ns'
+                      ],
+                      fast=attempts['1']['corners']['fast']['metrics'][
+                          'worst_setup_slack_ns'
+                      ],
+                  )
+              )
+          table = '\n'.join(
+              [
+                  '| Backend | Slow slack (ns) | Typical slack (ns) | Fast slack (ns) |',
+                  '|---|---:|---:|---:|',
+                  *rows,
+              ]
+          )
+
+          section = f'''## Qualified routed IHP PVT timing
+
+          The registered `4 × 6` IHP SG13G2 regression microcase now has a
+          permanent routed three-corner timing layer. It binds both physical
+          attempts for all three matched backends to exact routed Verilog, SPEF,
+          SDC, physical run manifests, the pinned IHP Open PDK commit, the three
+          official Liberty views, and the pinned OpenSTA source/tool manifest.
+
+          The qualifying matrix is:
+
+          ```text
+          3 backends × 2 physical attempts × 3 corners × 2 isolated replays
+          = 36 positive OpenSTA analyses
+
+          3 backends × 2 physical attempts
+          = 6 tight-clock negative controls
+          ```
+
+          Both physical attempts reproduce the same metrics for each
+          backend/corner, every raw report is replayed, and the result is checked
+          against reference SHA-256 `{reference_sha}`.
+
+          {table}
+
+          These are deterministic observations for one routed microcase under
+          three Liberty views. They do **not** establish OCV/AOCV/POCV,
+          statistical variation, crosstalk delay, IR drop, electromigration,
+          thermal/aging behavior, foundry-signoff STA, foundry sign-off, or
+          silicon behavior. See [`docs/PVT_CORNER_EVIDENCE.md`](docs/PVT_CORNER_EVIDENCE.md).
+          '''
+          section = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in section.splitlines()
+          ).strip() + '\n'
+
+          def insert_section(path: Path, heading: str, value: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if heading in text:
+                  return
+              candidates = ('\n## Limitations\n', '\n## Roadmap\n', '\n## Development\n')
+              for marker in candidates:
+                  if marker in text:
+                      text = text.replace(marker, '\n' + value + marker, 1)
+                      break
+              else:
+                  text = text.rstrip() + '\n\n' + value
+              path.write_text(text, encoding='utf-8')
+
+          insert_section(
+              Path('README.md'),
+              '## Qualified routed IHP PVT timing',
+              section,
+          )
+
+          status_path = Path('docs/POST_PHYSICAL_STATUS.md')
+          status = status_path.read_text(encoding='utf-8')
+          status_heading = '## Qualified routed PVT state — 26 August 2026'
+          if status_heading not in status:
+              block = f'''{status_heading}
+
+              The current permanent evidence chain includes routed PVT timing for
+              the exact registered `4 × 6` IHP SG13G2 microcase:
+
+              ```json
+              {{
+                "routed_pvt_corner_timing_qualified": true,
+                "comparative_pvt_claim_enabled": true,
+                "physical_attempt_timing_repeatability_verified": true,
+                "raw_pvt_report_replay_verified": true,
+                "tight_clock_negative_controls_detected": true,
+                "ocv_analyzed": false,
+                "aocv_analyzed": false,
+                "pocv_analyzed": false,
+                "statistical_variation_analyzed": false,
+                "crosstalk_delay_analyzed": false,
+                "ir_drop_analyzed": false,
+                "electromigration_analyzed": false,
+                "thermal_analyzed": false,
+                "foundry_signoff_sta_performed": false,
+                "foundry_signoff_complete": false,
+                "silicon_verified": false
+              }}
+              ```
+
+              Qualification requires the exact-head physical and post-physical
+              prerequisites, 36 positive analyses, six tight-clock controls, an
+              independently replayed artifact, and pinned reference SHA-256
+              `{reference_sha}`. This section supersedes any older roadmap prose
+              that described routed PVT as merely planned.
+              '''
+              block = '\n'.join(
+                  line[14:] if line.startswith('              ') else line
+                  for line in block.splitlines()
+              ).strip() + '\n\n'
+              lines = status.splitlines(keepends=True)
+              if not lines or not lines[0].startswith('#'):
+                  raise SystemExit('POST_PHYSICAL_STATUS lacks a title')
+              status = lines[0] + '\n' + block + ''.join(lines[1:]).lstrip('\n')
+              status_path.write_text(status, encoding='utf-8')
+
+          roadmap_path = Path('docs/ROADMAP.md')
+          roadmap = roadmap_path.read_text(encoding='utf-8')
+          roadmap_heading = '## Qualified routed PVT timing'
+          if roadmap_heading not in roadmap:
+              roadmap_block = f'''\n\n{roadmap_heading}
+
+              - [x] Bind slow, typical, and fast official IHP Liberty views by
+                Git blob and SHA-256.
+              - [x] Analyze all three matched backends and both routed physical
+                attempts with two isolated OpenSTA replays per corner.
+              - [x] Replay every raw timing report and require six backend/attempt
+                tight-clock controls.
+              - [x] Pin stable regression reference `{reference_sha}`.
+              - [ ] Add explicit OCV only when a justified derating contract exists.
+              - [ ] Add crosstalk, IR-drop, EM, thermal, and aging evidence only
+                with real collateral and separately bounded claims.
+              '''
+              roadmap_block = '\n'.join(
+                  line[14:] if line.startswith('              ') else line
+                  for line in roadmap_block.splitlines()
+              )
+              roadmap_path.write_text(
+                  roadmap.rstrip() + roadmap_block + '\n',
+                  encoding='utf-8',
+              )
+
+          physical_path = Path('docs/OPENROAD_PHYSICAL_EVIDENCE.md')
+          physical = physical_path.read_text(encoding='utf-8')
+          physical_heading = '## Downstream routed PVT qualification'
+          if physical_heading not in physical:
+              physical_block = f'''\n\n{physical_heading}
+
+              The two physical attempts per backend are now consumed by the
+              permanent routed PVT layer. The layer binds their exact routed
+              Verilog, SPEF, SDC, and run manifests and verifies identical
+              slow/typical/fast OpenSTA metrics across the two attempts. Its
+              regression reference SHA-256 is `{reference_sha}`.
+
+              This downstream result does not change the physical-flow claim
+              boundary: routed timing across three Liberty corners is not OCV,
+              SI/crosstalk analysis, power-integrity analysis, foundry sign-off,
+              or silicon verification.
+              '''
+              physical_block = '\n'.join(
+                  line[14:] if line.startswith('              ') else line
+                  for line in physical_block.splitlines()
+              )
+              physical_path.write_text(
+                  physical.rstrip() + physical_block + '\n',
+                  encoding='utf-8',
+              )
+
+          pvt_path = Path('docs/PVT_CORNER_EVIDENCE.md')
+          pvt = pvt_path.read_text(encoding='utf-8')
+          qualification_heading = '## Qualification status'
+          if qualification_heading not in pvt:
+              qualification = f'''\n\n{qualification_heading}
+
+              The permanent exact-head workflow is qualified only when the
+              versioned reference is present, `comparative_pvt_claim_enabled` is
+              true, all 36 positive analyses and six controls pass, and the
+              independent artifact-inspection workflow replays every raw report
+              without OpenSTA warnings or errors. The pinned reference SHA-256 is
+              `{reference_sha}`.
+              '''
+              qualification = '\n'.join(
+                  line[14:] if line.startswith('              ') else line
+                  for line in qualification.splitlines()
+              )
+              pvt_path.write_text(pvt.rstrip() + qualification + '\n', encoding='utf-8')
+          PY
+
+      - name: Check documentation and repository hygiene
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python scripts/check_repo_hygiene.py
+          git diff --check
+          grep -F '## Qualified routed IHP PVT timing' README.md
+          grep -F '## Qualified routed PVT state — 26 August 2026' \
+            docs/POST_PHYSICAL_STATUS.md
+          grep -F '## Qualified routed PVT timing' docs/ROADMAP.md
+          grep -F '## Downstream routed PVT qualification' \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md
+          grep -F '## Qualification status' docs/PVT_CORNER_EVIDENCE.md
+
+      - name: Commit only permanent documentation
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            README.md \
+            docs/POST_PHYSICAL_STATUS.md \
+            docs/ROADMAP.md \
+            docs/OPENROAD_PHYSICAL_EVIDENCE.md \
+            docs/PVT_CORNER_EVIDENCE.md
+          if git diff --cached --quiet; then
+            echo 'PVT documentation was already current.'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m 'docs: qualify routed IHP PVT evidence boundary'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
