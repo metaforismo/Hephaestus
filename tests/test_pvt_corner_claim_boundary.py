@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from hephaestus import pvt_corner
-from hephaestus.pvt_corner import _source
+from hephaestus.pvt_corner import _reference, _source
 
 
 def _valid_contract() -> dict[str, object]:
@@ -98,6 +98,34 @@ def _valid_post_physical_evidence() -> dict[str, object]:
     }
 
 
+def _valid_runtime_claims(*, comparative_enabled: bool) -> dict[str, bool]:
+    return {
+        "physical_evidence_prerequisite_verified": True,
+        "post_physical_equivalence_prerequisite_verified": True,
+        "all_six_routed_timing_cases_bound": True,
+        "official_ihp_open_pdk_commit_pinned": True,
+        "three_liberty_corners_bound_by_sha256": True,
+        "all_36_positive_analyses_completed": True,
+        "analysis_replay_repeatability_verified": True,
+        "physical_attempt_timing_repeatability_verified": True,
+        "six_tight_clock_negative_controls_detected": True,
+        "raw_report_replay_verified": True,
+        "multi_corner_timing_observed": True,
+        "comparative_pvt_claim_enabled": comparative_enabled,
+        "ocv_analyzed": False,
+        "aocv_analyzed": False,
+        "pocv_analyzed": False,
+        "statistical_variation_analyzed": False,
+        "crosstalk_delay_analyzed": False,
+        "ir_drop_analyzed": False,
+        "electromigration_analyzed": False,
+        "thermal_analyzed": False,
+        "foundry_signoff_sta_performed": False,
+        "foundry_signoff_complete": False,
+        "silicon_verified": False,
+    }
+
+
 def test_contract_rejects_claim_boundary_key_injection(tmp_path: Path) -> None:
     contract = _valid_contract()
     contract["claim_boundary"]["comparative_pvt_claim_enabled"] = True
@@ -124,3 +152,50 @@ def test_post_physical_prerequisite_accepts_only_the_exact_evidence_level() -> N
         match="unexpected post-physical evidence level",
     ):
         _source._validate_post_claims(evidence)
+
+
+def test_runtime_claims_accept_only_the_exact_bootstrap_boundary() -> None:
+    evidence = {"claims": _valid_runtime_claims(comparative_enabled=False)}
+
+    assert (
+        _reference._validate_runtime_claims(
+            evidence,
+            allowed_comparative_values=(False,),
+        )
+        is False
+    )
+
+    evidence["claims"]["unexpected_signoff_claim"] = False
+    with pytest.raises(
+        pvt_corner.PVTCornerError,
+        match="exact supported set",
+    ):
+        _reference._validate_runtime_claims(
+            evidence,
+            allowed_comparative_values=(False,),
+        )
+
+
+def test_runtime_claims_reject_premature_comparative_promotion() -> None:
+    evidence = {"claims": _valid_runtime_claims(comparative_enabled=True)}
+
+    with pytest.raises(
+        pvt_corner.PVTCornerError,
+        match="invalid qualification state",
+    ):
+        _reference._validate_runtime_claims(
+            evidence,
+            allowed_comparative_values=(False,),
+        )
+
+
+def test_runtime_claims_accept_the_exact_final_boundary() -> None:
+    evidence = {"claims": _valid_runtime_claims(comparative_enabled=True)}
+
+    assert (
+        _reference._validate_runtime_claims(
+            evidence,
+            allowed_comparative_values=(False, True),
+        )
+        is True
+    )
