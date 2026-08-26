@@ -265,7 +265,7 @@ def _validate_physical_claims(value: dict[str, Any]) -> None:
 def _validate_post_claims(value: dict[str, Any]) -> None:
     if value.get("schema") != "hephaestus.post-physical-equivalence-evidence.v1":
         raise PVTCornerError("unsupported post-physical evidence schema")
-    if value.get("evidence_level" != (
+    if value.get("evidence_level") != (
         "exact_registered_source_to_routed_sequential_equivalence"
     ):
         raise PVTCornerError("unexpected post-physical evidence level")
@@ -380,7 +380,7 @@ def validate_source_chain(
         or require_sha256(
             post.get("source", {}).get("prepared_manifest_sha256"),
             context="post-physical prepared manifest",
-         )
+        )
         != prepared_digest
     ):
         raise PVTCornerError("prepared physical manifest binding differs")
