@@ -10,8 +10,9 @@ from typing import Any
 
 from ._common import PVTCornerError, require_positive_int, sha256_file
 
+_REPORT_SCHEMA = 2
 _NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
-_SLACK_RE = re.compile(
+_CHECK_SLACK_RE = re.compile(
     rf"^\s*({_NUMBER})\s+slack\s+"
     r"\((MET|VIOLATED)\)\s*$",
     re.MULTILINE,
@@ -21,7 +22,7 @@ _WORST_SLACK_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 _TNS_RE = re.compile(
-    rf"^\s*tns(?:\s+max)?\s+({_NUMBER})\s*$",
+    rf"^\s*tns\s+max\s+({_NUMBER})\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
 _CLOCK_PERIOD_RE = re.compile(
@@ -29,8 +30,42 @@ _CLOCK_PERIOD_RE = re.compile(
     r"(?P<period>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"
 )
 _CORNER_MARKER_RE = re.compile(r"^HEPHAESTUS_PVT_CORNER=(\S+)$", re.MULTILINE)
+_REPORT_SCHEMA_RE = re.compile(
+    r"^HEPHAESTUS_PVT_REPORT_SCHEMA=(\d+)$",
+    re.MULTILINE,
+)
+_CHECK_SETUP_RE = re.compile(
+    r"^HEPHAESTUS_PVT_CHECK_SETUP_OK=([01])$",
+    re.MULTILINE,
+)
+_CLOCK_COUNT_RE = re.compile(
+    r"^HEPHAESTUS_PVT_CLOCK_COUNT=(\d+)$",
+    re.MULTILINE,
+)
+_PATH_COUNT_RE = re.compile(
+    r"^HEPHAESTUS_PVT_PATH_COUNT=(\d+)$",
+    re.MULTILINE,
+)
+_UNANNOTATED_RE = re.compile(
+    r"^Found\s+(\d+)\s+unannotated\s+drivers\.$",
+    re.MULTILINE,
+)
+_PARTIALLY_UNANNOTATED_RE = re.compile(
+    r"^Found\s+(\d+)\s+partially\s+unannotated\s+drivers\.$",
+    re.MULTILINE,
+)
 _DONE_MARKER = "HEPHAESTUS_PVT_DONE=1"
 _FATAL_RE = re.compile(r"(?m)^\s*(?:Error:|%Error|FATAL:)")
+_METRIC_KEYS = {
+    "worst_setup_slack_ns",
+    "slack_status",
+    "total_negative_slack_ns",
+    "check_setup_passed",
+    "clock_count",
+    "timing_path_count",
+    "unannotated_driver_count",
+    "partially_unannotated_driver_count",
+}
 
 
 def tighten_sdc(text: str, period_ns: float) -> str:
@@ -77,12 +112,32 @@ def emit_opensta_script(
             f"link_design {top_module}",
             f"read_sdc {_tcl_path(sdc, context='SDC')}",
             f"read_spef {_tcl_path(spef, context='SPEF')}",
-            "check_setup",
-            "set_propagated_clock [all_clocks]",
+            f'puts "HEPHAESTUS_PVT_REPORT_SCHEMA={_REPORT_SCHEMA}"',
+            "set hephaestus_clocks [all_clocks]",
+            "set hephaestus_clock_count [llength $hephaestus_clocks]",
+            'puts "HEPHAESTUS_PVT_CLOCK_COUNT=$hephaestus_clock_count"',
+            "if {$hephaestus_clock_count < 1} {",
+            '  error "HEPHAESTUS_PVT_NO_CLOCKS"',
+            "}",
+            "set hephaestus_setup_ok [check_setup]",
+            'puts "HEPHAESTUS_PVT_CHECK_SETUP_OK=$hephaestus_setup_ok"',
+            "if {!$hephaestus_setup_ok} {",
+            '  error "HEPHAESTUS_PVT_CHECK_SETUP_FAILED"',
+            "}",
+            "set_propagated_clock $hephaestus_clocks",
+            "set hephaestus_paths [find_timing_paths -path_delay max \\",
+            "  -group_path_count 1 -endpoint_path_count 1]",
+            "set hephaestus_path_count [llength $hephaestus_paths]",
+            'puts "HEPHAESTUS_PVT_PATH_COUNT=$hephaestus_path_count"',
+            "if {$hephaestus_path_count < 1} {",
+            '  error "HEPHAESTUS_PVT_NO_TIMING_PATHS"',
+            "}",
+            "report_parasitic_annotation",
             f'puts "HEPHAESTUS_PVT_CORNER={corner_label}"',
-            "report_checks -path_delay max -group_count 5 -endpoint_count 1",
+            "report_checks -path_delay max -group_path_count 5 \\",
+            "  -endpoint_path_count 1",
             "report_worst_slack -max",
-            "report_tns",
+            "report_tns -max",
             f'puts "{_DONE_MARKER}"',
             "exit 0",
             "",
@@ -90,27 +145,32 @@ def emit_opensta_script(
     )
 
 
+def _single_integer_marker(
+    pattern: re.Pattern[str],
+    stdout: str,
+    *,
+    context: str,
+) -> int:
+    matches = pattern.findall(stdout)
+    if len(matches) != 1:
+        raise PVTCornerError(
+            f"OpenSTA output must contain exactly one {context} marker"
+        )
+    return int(matches[0])
+
+
 def _parse_timing_metrics(stdout: str) -> tuple[float, str, float]:
-    """Parse the pinned OpenSTA summaries with a fixture-compatible fallback."""
+    check_matches = _CHECK_SLACK_RE.findall(stdout)
+    if not check_matches:
+        raise PVTCornerError("OpenSTA output lacks a parseable setup path")
 
     worst_matches = _WORST_SLACK_RE.findall(stdout)
-    if len(worst_matches) > 1:
-        raise PVTCornerError("OpenSTA output contains multiple worst-slack summaries")
-
-    check_matches = _SLACK_RE.findall(stdout)
-    if worst_matches:
-        slack = float(worst_matches[0])
-        status = "violated" if slack < 0 else "met"
-        if not check_matches:
-            raise PVTCornerError("OpenSTA output lacks a parseable setup path")
-    else:
-        # The fallback preserves the small executable fixture used by the unit
-        # suite. Real scripts always emit report_worst_slack above.
-        if not check_matches:
-            raise PVTCornerError("OpenSTA output lacks a parseable setup slack")
-        slack_text, raw_status = check_matches[-1]
-        slack = float(slack_text)
-        status = raw_status.lower()
+    if len(worst_matches) != 1:
+        raise PVTCornerError(
+            "OpenSTA output must contain exactly one worst-slack summary"
+        )
+    slack = float(worst_matches[0])
+    status = "violated" if slack < 0 else "met"
 
     tns_matches = _TNS_RE.findall(stdout)
     if len(tns_matches) != 1:
@@ -120,8 +180,6 @@ def _parse_timing_metrics(stdout: str) -> tuple[float, str, float]:
     tns = float(tns_matches[0])
     if not math.isfinite(slack) or not math.isfinite(tns):
         raise PVTCornerError("OpenSTA returned a non-finite timing metric")
-    if (slack < 0 and status != "violated") or (slack >= 0 and status != "met"):
-        raise PVTCornerError("OpenSTA slack sign and status disagree")
     if tns > 0:
         raise PVTCornerError("OpenSTA total negative slack cannot be positive")
     if slack >= 0 and not math.isclose(tns, 0.0, rel_tol=0.0, abs_tol=1e-12):
@@ -141,7 +199,7 @@ def parse_opensta_output(
     *,
     expected_label: str,
 ) -> dict[str, Any]:
-    """Parse a complete raw OpenSTA report and reject partial or fatal output."""
+    """Parse a complete raw OpenSTA report and reject partial or unsafe output."""
 
     combined = stdout + "\n" + stderr
     if _DONE_MARKER not in stdout:
@@ -155,20 +213,82 @@ def parse_opensta_output(
     if fatal is not None:
         line = combined[fatal.start() :].splitlines()[0]
         raise PVTCornerError(f"OpenSTA reported a fatal diagnostic: {line}")
+
+    report_schema = _single_integer_marker(
+        _REPORT_SCHEMA_RE,
+        stdout,
+        context="report-schema",
+    )
+    if report_schema != _REPORT_SCHEMA:
+        raise PVTCornerError(
+            f"unsupported OpenSTA PVT report schema: {report_schema}"
+        )
+    check_setup = _single_integer_marker(
+        _CHECK_SETUP_RE,
+        stdout,
+        context="check-setup",
+    )
+    if check_setup != 1:
+        raise PVTCornerError("OpenSTA check_setup did not pass")
+    clock_count = _single_integer_marker(
+        _CLOCK_COUNT_RE,
+        stdout,
+        context="clock-count",
+    )
+    if clock_count < 1:
+        raise PVTCornerError("OpenSTA analysis contains no clocks")
+    path_count = _single_integer_marker(
+        _PATH_COUNT_RE,
+        stdout,
+        context="timing-path-count",
+    )
+    if path_count < 1:
+        raise PVTCornerError("OpenSTA analysis contains no timing paths")
+    unannotated = _single_integer_marker(
+        _UNANNOTATED_RE,
+        stdout,
+        context="unannotated-driver-count",
+    )
+    partially_unannotated = _single_integer_marker(
+        _PARTIALLY_UNANNOTATED_RE,
+        stdout,
+        context="partially-unannotated-driver-count",
+    )
+    if unannotated != 0 or partially_unannotated != 0:
+        raise PVTCornerError(
+            "OpenSTA SPEF annotation is incomplete: "
+            f"unannotated={unannotated}, partially_unannotated={partially_unannotated}"
+        )
+
     slack, status, tns = _parse_timing_metrics(stdout)
     return {
         "worst_setup_slack_ns": slack,
         "slack_status": status,
         "total_negative_slack_ns": tns,
+        "check_setup_passed": True,
+        "clock_count": clock_count,
+        "timing_path_count": path_count,
+        "unannotated_driver_count": unannotated,
+        "partially_unannotated_driver_count": partially_unannotated,
     }
 
 
 def metrics_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if left.get("slack_status") != right.get("slack_status"):
+    if set(left) != _METRIC_KEYS or set(right) != _METRIC_KEYS:
         return False
+    for name in (
+        "slack_status",
+        "check_setup_passed",
+        "clock_count",
+        "timing_path_count",
+        "unannotated_driver_count",
+        "partially_unannotated_driver_count",
+    ):
+        if left[name] != right[name]:
+            return False
     for name in ("worst_setup_slack_ns", "total_negative_slack_ns"):
-        lhs = left.get(name)
-        rhs = right.get(name)
+        lhs = left[name]
+        rhs = right[name]
         if type(lhs) not in (int, float) or type(rhs) not in (int, float):
             return False
         if not math.isclose(float(lhs), float(rhs), rel_tol=0.0, abs_tol=1e-9):
