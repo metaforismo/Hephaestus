@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from hephaestus import pvt_corner
+from hephaestus.pvt_corner import _source
 
 
 def _valid_contract() -> dict[str, object]:
@@ -69,6 +70,34 @@ def _valid_contract() -> dict[str, object]:
     }
 
 
+def _valid_post_physical_evidence() -> dict[str, object]:
+    return {
+        "schema": "hephaestus.post-physical-equivalence-evidence.v1",
+        "evidence_level": (
+            "exact_registered_source_to_routed_sequential_equivalence"
+        ),
+        "claims": {
+            "registered_source_binding_verified": True,
+            "both_physical_attempts_per_backend_bound": True,
+            "all_three_routed_registered_implementations_equivalent": True,
+            "data_corruption_negative_control_detected": True,
+            "valid_latency_negative_control_detected": True,
+            "reset_state_negative_control_detected": True,
+            "post_physical_equivalence_verified": True,
+            "comparative_ppa_claim_enabled": True,
+            "four_state_semantics_verified": False,
+            "timing_annotated_functional_semantics_verified": False,
+            "drc_clean": False,
+            "lvs_clean": False,
+            "power_estimated_with_activity": False,
+            "post_layout_pex_verified": False,
+            "foundry_signoff_complete": False,
+            "silicon_verified": False,
+        },
+        "regression": {"passed": True},
+    }
+
+
 def test_contract_rejects_claim_boundary_key_injection(tmp_path: Path) -> None:
     contract = _valid_contract()
     contract["claim_boundary"]["comparative_pvt_claim_enabled"] = True
@@ -83,3 +112,15 @@ def test_contract_rejects_claim_boundary_key_injection(tmp_path: Path) -> None:
         match="exactly the supported false claims",
     ):
         pvt_corner.validate_contract(path)
+
+
+def test_post_physical_prerequisite_accepts_only_the_exact_evidence_level() -> None:
+    evidence = _valid_post_physical_evidence()
+    _source._validate_post_claims(evidence)
+
+    evidence["evidence_level"] = "structural_probe_only"
+    with pytest.raises(
+        pvt_corner.PVTCornerError,
+        match="unexpected post-physical evidence level",
+    ):
+        _source._validate_post_claims(evidence)
