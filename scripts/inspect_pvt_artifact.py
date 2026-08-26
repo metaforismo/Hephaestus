@@ -202,9 +202,10 @@ def inspect_artifact(
     if toolchain.get("opensta_commit") != _EXPECTED_OPENSTA_COMMIT:
         raise InspectionError("OpenSTA commit differs")
     liberty = toolchain.get("liberty")
-    if not isinstance(liberty, dict) or {
-        label: liberty.get(label, {}).get("sha256") for label in CORNERS
-    } != _EXPECTED_LIBERTY:
+    if (
+        not isinstance(liberty, dict)
+        or {label: liberty.get(label, {}).get("sha256") for label in CORNERS} != _EXPECTED_LIBERTY
+    ):
         raise InspectionError("PVT Liberty SHA-256 matrix differs")
 
     source = evidence.get("source")
@@ -271,11 +272,16 @@ def inspect_artifact(
                 for numeric in ("worst_setup_slack_ns", "total_negative_slack_ns"):
                     value = replayed[0].get(numeric)
                     if type(value) not in (int, float) or not math.isfinite(float(value)):
-                        raise InspectionError(f"non-finite PVT metric: {backend}/{corner}/{numeric}")
+                        raise InspectionError(
+                            f"non-finite PVT metric: {backend}/{corner}/{numeric}"
+                        )
                 metrics[backend][str(attempt)][corner] = replayed[0]
 
             control = case.get("negative_control")
-            if not isinstance(control, dict) or control.get("timing_violation_observed") is not True:
+            if (
+                not isinstance(control, dict)
+                or control.get("timing_violation_observed") is not True
+            ):
                 raise InspectionError(f"negative control is malformed for {backend}/{attempt}")
             workdir = (
                 evidence_root
