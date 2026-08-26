@@ -1,0 +1,268 @@
+name: Materialize qualified IHP DRC candidate
+
+on:
+  push:
+    branches:
+      - chore/materialize-qualified-ihp-drc-candidate
+  workflow_dispatch:
+
+concurrency:
+  group: materialize-qualified-ihp-drc-candidate
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/materialize-qualified-ihp-drc-candidate
+          fetch-depth: 0
+
+      - name: Wait for one exact-head research decision and package provenance
+        id: research
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 2160); do
+            prs=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=open&head=metaforismo:research/ihp-klayout-drc-probe-v1")
+            pr_number=$(jq -r '.[0].number // empty' <<<"$prs")
+            research_sha=$(jq -r '.[0].head.sha // empty' <<<"$prs")
+            if test -z "$pr_number" || test -z "$research_sha"; then
+              sleep 20
+              continue
+            fi
+            comments=$(gh api "/repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments?per_page=100")
+            decision=$(jq -r --arg sha "$research_sha" '
+              [.[] | select(.body | contains("HEPHAESTUS_DRC_RESEARCH_DECISION=" + $sha))]
+              | if length == 1 then .[0].body else empty end
+            ' <<<"$comments")
+            package=$(jq -r --arg sha "$research_sha" '
+              [.[] | select(.body | contains("HEPHAESTUS_KLAYOUT_PACKAGE_PROVENANCE=" + $sha))]
+              | if length == 1 then .[0].body else empty end
+            ' <<<"$comments")
+            if test -z "$decision" || test -z "$package"; then
+              sleep 20
+              continue
+            fi
+            printf '%s\n' "$decision" > /tmp/decision-comment.md
+            printf '%s\n' "$package" > /tmp/package-comment.md
+            python - <<'PY'
+            import json
+            import re
+            from pathlib import Path
+
+            def block(path: str) -> dict:
+                text = Path(path).read_text(encoding='utf-8')
+                values = re.findall(r'```json\s*(\{.*?\})\s*```', text, re.S)
+                if len(values) != 1:
+                    raise SystemExit(f'{path} does not contain exactly one JSON block')
+                value = json.loads(values[0])
+                if not isinstance(value, dict):
+                    raise SystemExit(f'{path} JSON block is not an object')
+                return value
+
+            decision = block('/tmp/decision-comment.md')
+            package = block('/tmp/package-comment.md')
+            if decision.get('methodology_ready_for_permanent_candidate') is not True:
+                raise SystemExit(
+                    'research result is truthful but not promotable: '
+                    + json.dumps(decision, sort_keys=True)
+                )
+            if decision.get('all_positive_reports_empty') is not True:
+                raise SystemExit('positive research reports are not all empty')
+            if decision.get('all_controls_strictly_increased_item_count') is not True:
+                raise SystemExit('research geometry controls are not strict increases')
+            for name in (
+                'open_minimal_drc_qualified',
+                'drc_clean',
+                'foundry_signoff_drc_clean',
+                'foundry_signoff_complete',
+                'silicon_verified',
+            ):
+                if decision.get(name) is not False:
+                    raise SystemExit(f'research decision overstates claim {name}')
+            required_package = (
+                'package',
+                'version',
+                'architecture',
+                'deb_filename',
+                'deb_sha256',
+                'deb_size_bytes',
+                'resolved_uri',
+                'klayout_banner',
+                'runner_image',
+            )
+            if any(name not in package for name in required_package):
+                raise SystemExit('KLayout package provenance is incomplete')
+            Path('/tmp/decision.json').write_text(
+                json.dumps(decision, indent=2, sort_keys=True) + '\n',
+                encoding='utf-8',
+            )
+            Path('/tmp/package.json').write_text(
+                json.dumps(package, indent=2, sort_keys=True) + '\n',
+                encoding='utf-8',
+            )
+            PY
+            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+            echo "research_sha=$research_sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          done
+          echo 'Research decision/provenance did not become available.' >&2
+          exit 1
+
+      - name: Create the permanent candidate contract from inspected research data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_SHA: ${{ steps.research.outputs.research_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B feat/qualified-ihp-klayout-drc-evidence origin/main
+          test ! -e configs/evidence/ihp_sg13g2_klayout_drc_v1.json
+          mkdir -p configs/evidence docs
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          decision = json.loads(Path('/tmp/decision.json').read_text(encoding='utf-8'))
+          package = json.loads(Path('/tmp/package.json').read_text(encoding='utf-8'))
+          contract = {
+              'schema': 'hephaestus.ihp-klayout-drc-contract.v1',
+              'contract_id': 'ihp-sg13g2-klayout-open-drc-v1',
+              'backends': [
+                  'shared_dag',
+                  'naive_shift_add',
+                  'constant_multipliers',
+              ],
+              'physical_attempts': [1, 2],
+              'analysis_replays': [1, 2],
+              'timeout_seconds': 1200,
+              'ihp_open_pdk': {
+                  'repository': 'https://github.com/IHP-GmbH/IHP-Open-PDK.git',
+                  'commit': '22f2a25f1734796de3debbbf29cf697cbbc54081',
+                  'deck': {
+                      'path': decision['selected_deck'],
+                      'sha256': decision['selected_deck_sha256'],
+                      'classification': decision['selected_deck_class'],
+                  },
+              },
+              'klayout': package,
+              'negative_control': {
+                  'method': 'one_dbu_boxes_on_most_populated_recursive_layers',
+                  'maximum_layers': 12,
+                  'box_size_dbu': 1,
+                  'placement_step_um': 0.25,
+              },
+              'claim_boundary': {
+                  'ihp_open_klayout_drc_qualified': False,
+                  'all_six_positive_reports_empty': False,
+                  'drc_clean': False,
+                  'foundry_signoff_drc_clean': False,
+                  'foundry_signoff_complete': False,
+                  'silicon_verified': False,
+              },
+          }
+          path = Path('configs/evidence/ihp_sg13g2_klayout_drc_v1.json')
+          path.write_text(
+              json.dumps(contract, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          handoff = f'''# Qualified IHP DRC promotion input
+
+          This feature branch was created only after the research probe and an
+          independent report-database replay agreed on the same research head:
+
+          ```text
+          {os.environ['RESEARCH_SHA']}
+          ```
+
+          Selected open-PDK deck:
+
+          ```text
+          {decision['selected_deck']}
+          SHA-256: {decision['selected_deck_sha256']}
+          class: {decision['selected_deck_class']}
+          ```
+
+          Research observations:
+
+          ```json
+          {json.dumps({
+              'positive_item_counts': decision['positive_item_counts'],
+              'negative_item_counts': decision['negative_item_counts'],
+              'all_positive_reports_empty': decision['all_positive_reports_empty'],
+              'all_controls_strictly_increased_item_count': decision[
+                  'all_controls_strictly_increased_item_count'
+              ],
+          }, indent=2, sort_keys=True)}
+          ```
+
+          KLayout distribution:
+
+          ```json
+          {json.dumps(package, indent=2, sort_keys=True)}
+          ```
+
+          This file is provenance for implementation review, not evidence. The
+          feature branch must still add normal package code, tests, an exact-head
+          same-run workflow, report replay, a versioned regression reference, an
+          independent artifact inspector, and documentation before any claim can
+          become true.
+          '''
+          handoff = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in handoff.splitlines()
+          ).strip() + '\n'
+          Path('docs/IHP_KLAYOUT_DRC_PROMOTION_INPUT.md').write_text(
+              handoff,
+              encoding='utf-8',
+          )
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            configs/evidence/ihp_sg13g2_klayout_drc_v1.json \
+            docs/IHP_KLAYOUT_DRC_PROMOTION_INPUT.md
+          git diff --cached --check
+          git commit -m 'chore: seed qualified IHP DRC evidence candidate'
+          git push origin HEAD:feat/qualified-ihp-klayout-drc-evidence
+
+      - name: Record the materialized candidate on the research PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.research.outputs.pr_number }}
+          RESEARCH_SHA: ${{ steps.research.outputs.research_sha }}
+        run: |
+          body=$(cat <<EOF
+          Permanent candidate materialized from research head `$RESEARCH_SHA`:
+
+          ```text
+          feat/qualified-ihp-klayout-drc-evidence
+          ```
+
+          The feature branch currently contains only the machine-readable selected-deck/KLayout contract and promotion provenance. No DRC claim has been enabled.
+          EOF
+          )
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body"
+
+      - name: Delete the transient materialization branch
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin --delete chore/materialize-qualified-ihp-drc-candidate
