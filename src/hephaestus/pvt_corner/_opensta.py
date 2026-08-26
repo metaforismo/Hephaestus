@@ -89,6 +89,14 @@ def _tcl_path(path: Path, *, context: str) -> str:
     return "{" + value + "}"
 
 
+def _tcl_identifier(value: str, *, context: str) -> str:
+    """Return a braced Tcl word for one already-validated Verilog identifier."""
+
+    if "{" in value or "}" in value or "\n" in value or "\r" in value:
+        raise PVTCornerError(f"{context} cannot be represented safely in Tcl")
+    return "{" + value + "}"
+
+
 def emit_opensta_script(
     *,
     liberty: Path,
@@ -109,7 +117,7 @@ def emit_opensta_script(
             "sta::set_sta_continue_on_error 0",
             f"read_liberty {_tcl_path(liberty, context='Liberty')}",
             f"read_verilog {_tcl_path(netlist, context='netlist')}",
-            f"link_design {top_module}",
+            f"link_design {_tcl_identifier(top_module, context='top module')}",
             f"read_sdc {_tcl_path(sdc, context='SDC')}",
             f"read_spef {_tcl_path(spef, context='SPEF')}",
             f'puts "HEPHAESTUS_PVT_REPORT_SCHEMA={_REPORT_SCHEMA}"',
