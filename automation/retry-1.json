@@ -1,0 +1,4 @@
+{
+  "reason": "Retry after the user-authored strict-CI trigger commit.",
+  "pr": 42
+}
