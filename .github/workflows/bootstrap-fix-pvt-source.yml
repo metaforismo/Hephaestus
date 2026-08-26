@@ -1,0 +1,86 @@
+name: Repair PVT source claim boundary
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Restore the exact reviewed source and apply one fail-closed patch
+        run: |
+          set -euo pipefail
+          git show \
+            e357d473db02b09e94634fdc0d96c8bec517d8b7:src/hephaestus/pvt_corner/_source.py \
+            > src/hephaestus/pvt_corner/_source.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/hephaestus/pvt_corner/_source.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    require_claims(
+              claim_boundary,
+              required_true=(),
+              required_false=required_false,
+              context="PVT contract",
+          )
+          '''
+          new = '''    if (
+              not isinstance(claim_boundary, dict)
+              or set(claim_boundary) != set(required_false)
+          ):
+              raise PVTCornerError(
+                  "PVT contract claim boundary must contain exactly the supported false claims"
+              )
+          require_claims(
+              claim_boundary,
+              required_true=(),
+              required_false=required_false,
+              context="PVT contract",
+          )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one claim-boundary validation block')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+      - name: Verify the complete repaired source
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format src/hephaestus/pvt_corner/_source.py \
+            tests/test_pvt_corner_claim_boundary.py
+          ruff check src/hephaestus/pvt_corner tests/test_pvt_corner*.py
+          ruff format --check src/hephaestus/pvt_corner tests/test_pvt_corner*.py
+          pytest tests/test_pvt_corner.py tests/test_pvt_corner_claim_boundary.py
+          python -m py_compile src/hephaestus/pvt_corner/_source.py
+          git diff --check
+          test "$(git diff --name-only | sort)" = \
+            'src/hephaestus/pvt_corner/_source.py'
+
+      - name: Commit only the repaired permanent source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hephaestus/pvt_corner/_source.py
+          git diff --cached --check
+          git commit -m 'fix: enforce exact PVT claim-boundary keys'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
