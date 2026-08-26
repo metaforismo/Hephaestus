@@ -1,0 +1,215 @@
+name: PVT path hardening materialization
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Harden reference and inspection output paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          common = Path('src/hephaestus/pvt_corner/_common.py')
+          text = common.read_text(encoding='utf-8')
+          marker = '\n\ndef paths_overlap(lhs: Path, rhs: Path) -> bool:\n'
+          addition = '''
+
+          def resolve_output_file(path: Path, *, context: str) -> Path:
+              """Resolve a new output file without following any symbolic link."""
+
+              candidate = absolute_without_symlink_resolution(path)
+              reject_symlink_components(candidate.parent, context=f"{context} parent")
+              if candidate.is_symlink():
+                  raise PVTCornerError(f"{context} must not be a symbolic link: {candidate}")
+              if candidate.exists():
+                  raise PVTCornerError(f"{context} already exists: {candidate}")
+              return candidate.resolve()
+          '''
+          addition = '\n'.join(line[10:] if line.startswith('          ') else line for line in addition.splitlines())
+          if 'def resolve_output_file(' not in text:
+              if marker not in text:
+                  raise SystemExit('cannot locate common.py insertion point')
+              text = text.replace(marker, addition + marker, 1)
+              common.write_text(text, encoding='utf-8')
+
+          builder = Path('src/hephaestus/pvt_corner/_builder.py')
+          text = builder.read_text(encoding='utf-8')
+          if '    resolve_output_file,\n' not in text:
+              text = text.replace(
+                  '    resolve_output_directory,\n',
+                  '    resolve_output_directory,\n    resolve_output_file,\n',
+                  1,
+              )
+          old = '''    output = Path(output_path)
+              if output.exists():
+                  raise PVTCornerError(f"reference output already exists: {output}")
+          '''
+          old = '\n'.join(line[4:] if line.startswith('    ') else line for line in old.splitlines())
+          new = '''    output = resolve_output_file(
+                  Path(output_path),
+                  context="PVT reference output",
+              )
+          '''
+          new = '\n'.join(line[4:] if line.startswith('    ') else line for line in new.splitlines())
+          if old not in text and 'context="PVT reference output"' not in text:
+              raise SystemExit('cannot locate build_reference output block')
+          if old in text:
+              text = text.replace(old, new, 1)
+          builder.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_pvt_corner.py')
+          text = tests.read_text(encoding='utf-8')
+          test_name = 'test_reference_output_rejects_a_dangling_symlink'
+          if test_name not in text:
+              text += '''
+
+          def test_reference_output_rejects_a_dangling_symlink(tmp_path: Path) -> None:
+              target = tmp_path / "outside.json"
+              link = tmp_path / "reference.json"
+              link.symlink_to(target)
+
+              with pytest.raises(pvt_corner.PVTCornerError, match="symbolic link"):
+                  _common.resolve_output_file(link, context="PVT reference output")
+
+              assert not target.exists()
+
+
+          def test_reference_output_rejects_a_symlinked_parent(tmp_path: Path) -> None:
+              real = tmp_path / "real"
+              real.mkdir()
+              alias = tmp_path / "alias"
+              alias.symlink_to(real, target_is_directory=True)
+
+              with pytest.raises(pvt_corner.PVTCornerError, match="must not contain symlinks"):
+                  _common.resolve_output_file(
+                      alias / "reference.json",
+                      context="PVT reference output",
+                  )
+          '''
+              text = '\n'.join(
+                  line[10:] if line.startswith('          ') else line
+                  for line in text.splitlines()
+              ) + '\n'
+              tests.write_text(text, encoding='utf-8')
+
+          inspector = Path('scripts/inspect_pvt_artifact.py')
+          if inspector.exists():
+              text = inspector.read_text(encoding='utf-8')
+              marker = '\n\ndef inspect_artifact(\n'
+              addition = '''
+
+              def _safe_output_file(path: Path) -> Path:
+                  candidate = Path(os.path.abspath(os.fspath(path)))
+                  current = Path(candidate.anchor)
+                  for part in candidate.parent.parts[1:]:
+                      current /= part
+                      if current.is_symlink():
+                          raise InspectionError(
+                              f"inspection output parent contains a symlink: {candidate}"
+                          )
+                  if candidate.is_symlink():
+                      raise InspectionError(
+                          f"inspection output must not be a symlink: {candidate}"
+                      )
+                  if candidate.exists():
+                      raise InspectionError(
+                          f"inspection output already exists: {candidate}"
+                      )
+                  return candidate.resolve()
+              '''
+              addition = '\n'.join(
+                  line[14:] if line.startswith('              ') else line
+                  for line in addition.splitlines()
+              )
+              if 'def _safe_output_file(' not in text:
+                  if marker not in text:
+                      raise SystemExit('cannot locate inspector insertion point')
+                  text = text.replace(marker, addition + marker, 1)
+              old = '''    if args.out.exists():
+                  raise InspectionError(f"inspection output already exists: {args.out}")
+              args.out.parent.mkdir(parents=True, exist_ok=True)
+              args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+              '''
+              old = '\n'.join(
+                  line[4:] if line.startswith('    ') else line
+                  for line in old.splitlines()
+              )
+              new = '''    output = _safe_output_file(args.out)
+              output.parent.mkdir(parents=True, exist_ok=True)
+              output.write_text(
+                  json.dumps(report, indent=2, sort_keys=True) + "\\n",
+                  encoding="utf-8",
+              )
+              '''
+              new = '\n'.join(
+                  line[4:] if line.startswith('    ') else line
+                  for line in new.splitlines()
+              )
+              if old not in text and 'output = _safe_output_file(args.out)' not in text:
+                  raise SystemExit('cannot locate inspector output block')
+              if old in text:
+                  text = text.replace(old, new, 1)
+              inspector.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format, lint, and test hardened paths
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          targets=(
+            src/hephaestus/pvt_corner/_common.py
+            src/hephaestus/pvt_corner/_builder.py
+            tests/test_pvt_corner.py
+          )
+          if test -f scripts/inspect_pvt_artifact.py; then
+            targets+=(scripts/inspect_pvt_artifact.py tests/test_inspect_pvt_artifact.py)
+          fi
+          ruff format "${targets[@]}"
+          ruff check --fix "${targets[@]}"
+          ruff format "${targets[@]}"
+          ruff check "${targets[@]}"
+          ruff format --check "${targets[@]}"
+          pytest tests/test_pvt_corner.py tests/test_inspect_pvt_artifact.py
+          python scripts/check_repo_hygiene.py
+          find src scripts tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf .pytest_cache
+          git diff --check
+
+      - name: Commit only permanent path hardening
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/hephaestus/pvt_corner/_common.py \
+            src/hephaestus/pvt_corner/_builder.py \
+            tests/test_pvt_corner.py \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          if git diff --cached --quiet; then
+            echo 'Path boundary was already hardened.'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m 'security: harden PVT output path boundaries'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
