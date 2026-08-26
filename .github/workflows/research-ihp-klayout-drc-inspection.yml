@@ -1,0 +1,153 @@
+name: Research IHP KLayout DRC artifact inspection
+
+on:
+  push:
+    branches:
+      - research/ihp-klayout-drc-probe-v1
+  workflow_dispatch:
+
+concurrency:
+  group: research-ihp-klayout-drc-inspection-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Lint the independent research inspector
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check research/inspect_ihp_klayout_drc_probe.py
+          ruff format --check research/inspect_ihp_klayout_drc_probe.py
+          python research/inspect_ihp_klayout_drc_probe.py --help
+
+      - name: Locate the successful exact-head DRC research run
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 1080); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/research-ihp-klayout-drc-probe.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number, .run_attempt)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if test -z "$run_id"; then
+              sleep 20
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if test "$status" = completed; then
+              if test "$conclusion" != success; then
+                echo "Exact-head DRC research workflow failed: $conclusion" >&2
+                echo "$html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'No successful exact-head DRC research workflow completed.' >&2
+          exit 1
+
+      - name: Download the exact research artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_RUN_ID: ${{ steps.probe.outputs.run_id }}
+        run: |
+          mkdir -p build/ihp-drc-inspection/artifact
+          gh run download "$PROBE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-research-ihp-klayout-drc-probe \
+            --dir build/ihp-drc-inspection/artifact
+
+      - uses: actions/checkout@v4
+        with:
+          repository: IHP-GmbH/IHP-Open-PDK
+          ref: 22f2a25f1734796de3debbbf29cf697cbbc54081
+          path: build/ihp-drc-inspection/ihp-open-pdk
+          fetch-depth: 1
+
+      - name: Replay report databases and provenance independently
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python research/inspect_ihp_klayout_drc_probe.py \
+            build/ihp-drc-inspection/artifact \
+            --pdk build/ihp-drc-inspection/ihp-open-pdk \
+            --expected-source-revision "$TARGET_SHA" \
+            --out build/ihp-drc-inspection/inspection.json
+
+      - name: Validate the independent research decision
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          value = json.loads(
+              Path('build/ihp-drc-inspection/inspection.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert value['schema'] == (
+              'hephaestus.research.ihp-klayout-drc-inspection.v1'
+          )
+          assert value['source_revision'] == os.environ['TARGET_SHA']
+          assert value['pdk_commit'] == (
+              '22f2a25f1734796de3debbbf29cf697cbbc54081'
+          )
+          assert value['positive_reports_replayed'] == 6
+          assert value['negative_reports_replayed'] == 6
+          assert value['source_gds_bindings_rechecked'] == 12
+          assert value['all_controls_strictly_increased_item_count'] is True
+          assert value['claim_boundary'] == {
+              'open_minimal_drc_qualified': False,
+              'drc_clean': False,
+              'foundry_signoff_drc_clean': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
+          assert value['result'] == 'passed'
+          PY
+
+      - name: Upload the independent inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-research-ihp-klayout-drc-inspection
+          path: build/ihp-drc-inspection/inspection.json
+          if-no-files-found: error
+          retention-days: 30
