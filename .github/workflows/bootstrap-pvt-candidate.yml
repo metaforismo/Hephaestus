@@ -24,7 +24,7 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Materialize the reviewed candidate and remove bootstrap residue
+      - name: Materialize the reviewed code candidate
         run: |
           set -euo pipefail
           cat .github/pvt-candidate-payload/part-* > /tmp/pvt-candidate.b64
@@ -36,8 +36,7 @@ jobs:
             bae67e08addcd813733fe56c54da37dc4fab2b5254b1078ea046080901b7ea4e \
             /tmp/pvt-candidate.tar.gz | sha256sum --check --strict
           tar -xzf /tmp/pvt-candidate.tar.gz
-          rm -rf .github/pvt-candidate-payload
-          rm .github/workflows/bootstrap-pvt-candidate.yml
+          rm .github/workflows/pvt-corner-evidence.yml
 
       - name: Format, lint, test, and verify hygiene
         run: |
@@ -64,20 +63,21 @@ jobs:
           find src tests -type d -name __pycache__ -prune -exec rm -rf {} +
           rm -rf .pytest_cache
           git diff --check
-          test ! -e .github/pvt-candidate-payload
-          test ! -e .github/workflows/bootstrap-pvt-candidate.yml
-          test -f .github/workflows/pvt-corner-evidence.yml
-          if find src tests -type d -name __pycache__ | grep -q .; then
-            echo 'Generated Python caches remain after cleanup.' >&2
-            exit 1
-          fi
+          test -e .github/pvt-candidate-payload/part-00
+          test -e .github/pvt-candidate-payload/part-01
+          test -e .github/workflows/bootstrap-pvt-candidate.yml
+          test ! -e .github/workflows/pvt-corner-evidence.yml
 
-      - name: Commit the clean permanent candidate
+      - name: Commit only the clean permanent code candidate
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add \
+            configs/evidence/ihp_sg13g2_pvt_corner_v2.json \
+            docs/PVT_CORNER_EVIDENCE.md \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
           git diff --cached --check
           git commit -m 'feat: add qualified routed IHP PVT evidence candidate'
           git push origin HEAD:feat/qualified-ihp-pvt-evidence
