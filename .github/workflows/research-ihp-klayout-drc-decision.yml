@@ -1,0 +1,145 @@
+name: Research IHP KLayout DRC promotion decision
+
+on:
+  push:
+    branches:
+      - research/ihp-klayout-drc-probe-v1
+  workflow_dispatch:
+
+concurrency:
+  group: research-ihp-klayout-drc-decision-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  decide:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Locate the successful exact-head inspection workflow
+        id: inspection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 1080); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/research-ihp-klayout-drc-inspection.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number, .run_attempt)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if test -z "$run_id"; then
+              sleep 20
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if test "$status" = completed; then
+              if test "$conclusion" != success; then
+                echo "Exact-head DRC inspection failed: $conclusion" >&2
+                echo "$html_url" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'No successful exact-head DRC inspection completed.' >&2
+          exit 1
+
+      - name: Download the exact inspection decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSPECTION_RUN_ID: ${{ steps.inspection.outputs.run_id }}
+        run: |
+          mkdir -p build/ihp-drc-decision
+          gh run download "$INSPECTION_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name hephaestus-research-ihp-klayout-drc-inspection \
+            --dir build/ihp-drc-decision
+          test "$(find build/ihp-drc-decision -type f -name inspection.json | wc -l)" -eq 1
+
+      - name: Publish the exact-head research decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          inspection=$(find build/ihp-drc-decision -type f -name inspection.json -print -quit)
+          jq -e --arg sha "$TARGET_SHA" '
+            .schema == "hephaestus.research.ihp-klayout-drc-inspection.v1"
+            and .source_revision == $sha
+            and .positive_reports_replayed == 6
+            and .negative_reports_replayed == 6
+            and .all_controls_strictly_increased_item_count == true
+            and .result == "passed"
+          ' "$inspection" >/dev/null
+          pr=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=open&head=metaforismo:research/ihp-klayout-drc-probe-v1")
+          pr_number=$(jq -r '.[0].number // empty' <<<"$pr")
+          test -n "$pr_number"
+          existing=$(gh api "/repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments?per_page=100" \
+            | jq -r --arg sha "$TARGET_SHA" \
+              '.[] | select(.body | contains("HEPHAESTUS_DRC_RESEARCH_DECISION=" + $sha)) | .id' \
+            | head -n 1)
+          if test -n "$existing"; then
+            echo "Research decision already published as comment $existing."
+            exit 0
+          fi
+          selected_deck=$(jq -r '.selected_deck' "$inspection")
+          selected_digest=$(jq -r '.selected_deck_sha256' "$inspection")
+          deck_class=$(jq -r '.selected_deck_class' "$inspection")
+          positives=$(jq -c '.positive_item_counts' "$inspection")
+          negatives=$(jq -c '.negative_item_counts' "$inspection")
+          empty=$(jq -r '.all_positive_reports_empty' "$inspection")
+          ready=$(jq -r '.methodology_ready_for_permanent_candidate' "$inspection")
+          body=$(cat <<EOF
+          HEPHAESTUS_DRC_RESEARCH_DECISION=$TARGET_SHA
+
+          ```json
+          {
+            "selected_deck": "$selected_deck",
+            "selected_deck_sha256": "$selected_digest",
+            "selected_deck_class": "$deck_class",
+            "positive_item_counts": $positives,
+            "negative_item_counts": $negatives,
+            "all_positive_reports_empty": $empty,
+            "all_controls_strictly_increased_item_count": true,
+            "methodology_ready_for_permanent_candidate": $ready,
+            "open_minimal_drc_qualified": false,
+            "drc_clean": false,
+            "foundry_signoff_drc_clean": false,
+            "foundry_signoff_complete": false,
+            "silicon_verified": false
+          }
+          ```
+
+          This comment is a research decision, not a promoted claim. A permanent candidate is permitted only when `methodology_ready_for_permanent_candidate` is true and must still replace this workflow with normal package code, a pinned KLayout distribution, exact-head same-run binding, stable report replay, a versioned reference, and independent artifact inspection.
+          EOF
+          )
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" \
+            -f body="$body"
