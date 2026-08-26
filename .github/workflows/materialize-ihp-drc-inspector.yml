@@ -1,0 +1,50 @@
+name: Materialize IHP DRC research inspector
+
+on:
+  push:
+    branches:
+      - research/ihp-klayout-drc-probe-v1
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/ihp-klayout-drc-probe-v1
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Canonicalize and smoke-test the inspector
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format research/inspect_ihp_klayout_drc_probe.py
+          ruff check --fix research/inspect_ihp_klayout_drc_probe.py
+          ruff format research/inspect_ihp_klayout_drc_probe.py
+          ruff check research/inspect_ihp_klayout_drc_probe.py
+          ruff format --check research/inspect_ihp_klayout_drc_probe.py
+          python research/inspect_ihp_klayout_drc_probe.py --help
+          git diff --check
+
+      - name: Commit only canonical research inspection source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/inspect_ihp_klayout_drc_probe.py
+          if git diff --cached --quiet; then
+            echo 'Research inspector was already canonical.'
+            exit 0
+          fi
+          git commit -m 'style: canonicalize IHP DRC research inspector'
+          git push origin HEAD:research/ihp-klayout-drc-probe-v1
