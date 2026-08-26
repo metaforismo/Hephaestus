@@ -33,11 +33,11 @@ jobs:
           python -m pip install -e '.[dev]'
           ruff check \
             src/hephaestus/pvt_corner \
-            tests/test_pvt_corner.py
+            tests/test_pvt_corner*.py
           ruff format --check \
             src/hephaestus/pvt_corner \
-            tests/test_pvt_corner.py
-          pytest tests/test_pvt_corner.py
+            tests/test_pvt_corner*.py
+          pytest tests/test_pvt_corner*.py
           python -m hephaestus.pvt_corner --help
 
   qualify:
@@ -173,7 +173,7 @@ jobs:
             --source-revision "$TARGET_SHA" \
             --upstream-run-id "$UPSTREAM_RUN_ID"
 
-      - name: Validate the bootstrap claim boundary
+      - name: Validate the exact bootstrap claim boundary
         env:
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
@@ -218,11 +218,31 @@ jobs:
               'passed': False,
               'bootstrap_reference_required': True,
           }
-          assert evidence['claims']['comparative_pvt_claim_enabled'] is False
-          assert evidence['claims']['multi_corner_timing_observed'] is True
-          assert evidence['claims']['foundry_signoff_sta_performed'] is False
-          assert evidence['claims']['foundry_signoff_complete'] is False
-          assert evidence['claims']['silicon_verified'] is False
+          assert evidence['claims'] == {
+              'physical_evidence_prerequisite_verified': True,
+              'post_physical_equivalence_prerequisite_verified': True,
+              'all_six_routed_timing_cases_bound': True,
+              'official_ihp_open_pdk_commit_pinned': True,
+              'three_liberty_corners_bound_by_sha256': True,
+              'all_36_positive_analyses_completed': True,
+              'analysis_replay_repeatability_verified': True,
+              'physical_attempt_timing_repeatability_verified': True,
+              'six_tight_clock_negative_controls_detected': True,
+              'raw_report_replay_verified': True,
+              'multi_corner_timing_observed': True,
+              'comparative_pvt_claim_enabled': False,
+              'ocv_analyzed': False,
+              'aocv_analyzed': False,
+              'pocv_analyzed': False,
+              'statistical_variation_analyzed': False,
+              'crosstalk_delay_analyzed': False,
+              'ir_drop_analyzed': False,
+              'electromigration_analyzed': False,
+              'thermal_analyzed': False,
+              'foundry_signoff_sta_performed': False,
+              'foundry_signoff_complete': False,
+              'silicon_verified': False,
+          }
           PY
 
       - name: Upload diagnostics after a failed qualification
