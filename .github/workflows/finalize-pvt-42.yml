@@ -1,0 +1,80 @@
+name: Finalize qualified routed PVT PR 42
+
+on:
+  push:
+    branches:
+      - automation/finalize-pvt-42
+
+concurrency:
+  group: finalize-pvt-42
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation/finalize-pvt-42
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Normalize and syntax-check the finalizer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('automation/finalize_pvt42.py')
+          text = path.read_text(encoding='utf-8')
+          marker = '    except Exception as exc:\n'
+          if marker not in text:
+              raise SystemExit('finalizer exception boundary is missing')
+          prefix = text[: text.index(marker)]
+          tail = '''    except Exception as exc:
+        try:
+            comment(
+                "PVT finalization stopped fail-closed. No merge was attempted after "
+                "the failing boundary.\\n\\n```text\\n"
+                f"{type(exc).__name__}: {exc}\\n```"
+            )
+        except Exception:
+            pass
+        raise
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+          path.write_text(prefix + tail, encoding='utf-8')
+          PY
+          python -m py_compile automation/finalize_pvt42.py
+          git diff --check
+
+      - name: Persist the normalized regular script
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add automation/finalize_pvt42.py
+          if git diff --cached --quiet; then
+            echo 'Finalizer already normalized.'
+          else
+            git commit -m 'automation: normalize PVT finalizer'
+            git push origin HEAD:automation/finalize-pvt-42
+          fi
+
+      - name: Execute the fail-closed PVT finalizer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python automation/finalize_pvt42.py
