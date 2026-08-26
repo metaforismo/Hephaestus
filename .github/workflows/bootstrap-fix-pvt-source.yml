@@ -1,9 +1,13 @@
-name: Repair PVT source claim boundary
+name: Repair PVT source syntax
 
 on:
   push:
     branches:
       - feat/qualified-ihp-pvt-evidence
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -24,49 +28,32 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Restore the exact reviewed source and apply one fail-closed patch
+      - name: Apply the exact syntax repair
         run: |
           set -euo pipefail
-          git show \
-            e357d473db02b09e94634fdc0d96c8bec517d8b7:src/hephaestus/pvt_corner/_source.py \
-            > src/hephaestus/pvt_corner/_source.py
           python - <<'PY'
           from pathlib import Path
 
           path = Path('src/hephaestus/pvt_corner/_source.py')
           text = path.read_text(encoding='utf-8')
-          old = '''    require_claims(
-              claim_boundary,
-              required_true=(),
-              required_false=required_false,
-              context="PVT contract",
-          )
-          '''
-          new = '''    if (
-              not isinstance(claim_boundary, dict)
-              or set(claim_boundary) != set(required_false)
+          old = '''    if value.get("evidence_level" != (
+              "exact_registered_source_to_routed_sequential_equivalence"
           ):
-              raise PVTCornerError(
-                  "PVT contract claim boundary must contain exactly the supported false claims"
-              )
-          require_claims(
-              claim_boundary,
-              required_true=(),
-              required_false=required_false,
-              context="PVT contract",
-          )
+          '''
+          new = '''    if value.get("evidence_level") != (
+              "exact_registered_source_to_routed_sequential_equivalence"
+          ):
           '''
           if text.count(old) != 1:
-              raise SystemExit('expected exactly one claim-boundary validation block')
+              raise SystemExit('expected exactly one malformed evidence-level check')
           path.write_text(text.replace(old, new), encoding='utf-8')
           PY
 
-      - name: Verify the complete repaired source
+      - name: Verify the repaired permanent source
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
-          ruff format src/hephaestus/pvt_corner/_source.py \
-            tests/test_pvt_corner_claim_boundary.py
+          ruff format src/hephaestus/pvt_corner/_source.py
           ruff check src/hephaestus/pvt_corner tests/test_pvt_corner*.py
           ruff format --check src/hephaestus/pvt_corner tests/test_pvt_corner*.py
           pytest tests/test_pvt_corner.py tests/test_pvt_corner_claim_boundary.py
@@ -75,12 +62,12 @@ jobs:
           test "$(git diff --name-only | sort)" = \
             'src/hephaestus/pvt_corner/_source.py'
 
-      - name: Commit only the repaired permanent source
+      - name: Commit only the repaired source
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/hephaestus/pvt_corner/_source.py
           git diff --cached --check
-          git commit -m 'fix: enforce exact PVT claim-boundary keys'
+          git commit -m 'fix: repair PVT source evidence-level validation'
           git push origin HEAD:feat/qualified-ihp-pvt-evidence
