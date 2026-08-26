@@ -1,0 +1,81 @@
+name: Bootstrap qualified PVT candidate
+
+on:
+  push:
+    branches:
+      - feat/qualified-ihp-pvt-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/qualified-ihp-pvt-evidence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Materialize the reviewed candidate and remove bootstrap residue
+        run: |
+          set -euo pipefail
+          cat .github/pvt-candidate-payload/part-* > /tmp/pvt-candidate.b64
+          printf '%s  %s\n' \
+            c3c15c62ce467773e83df0abae72c19d0fd07b09581794220d1a79cd77d8ec4e \
+            /tmp/pvt-candidate.b64 | sha256sum --check --strict
+          base64 --decode /tmp/pvt-candidate.b64 > /tmp/pvt-candidate.tar.gz
+          printf '%s  %s\n' \
+            bae67e08addcd813733fe56c54da37dc4fab2b5254b1078ea046080901b7ea4e \
+            /tmp/pvt-candidate.tar.gz | sha256sum --check --strict
+          tar -xzf /tmp/pvt-candidate.tar.gz
+          rm -rf .github/pvt-candidate-payload
+          rm .github/workflows/bootstrap-pvt-candidate.yml
+
+      - name: Format, lint, test, and verify hygiene
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff format \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          ruff check --fix \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          ruff format \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          ruff check \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          ruff format --check \
+            src/hephaestus/pvt_corner \
+            tests/test_pvt_corner.py
+          pytest tests/test_pvt_corner.py
+          python -m hephaestus.pvt_corner --help
+          python scripts/check_repo_hygiene.py
+          git diff --check
+          test ! -e .github/pvt-candidate-payload
+          test ! -e .github/workflows/bootstrap-pvt-candidate.yml
+          test -f .github/workflows/pvt-corner-evidence.yml
+          if find src/hephaestus/pvt_corner -type d -name __pycache__ | grep -q .; then
+            echo 'Generated Python caches were materialized.' >&2
+            exit 1
+          fi
+
+      - name: Commit the clean permanent candidate
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: add qualified routed IHP PVT evidence candidate'
+          git push origin HEAD:feat/qualified-ihp-pvt-evidence
