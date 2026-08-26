@@ -1,0 +1,111 @@
+name: Research IHP KLayout package provenance
+
+on:
+  push:
+    branches:
+      - research/ihp-klayout-drc-probe-v1
+  workflow_dispatch:
+
+concurrency:
+  group: research-ihp-klayout-package-provenance-v1
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Resolve, download, hash, and execute the KLayout package
+        run: |
+          set -euo pipefail
+          mkdir -p build/klayout-package
+          sudo apt-get update
+          candidate=$(apt-cache policy klayout | awk '/Candidate:/ {print $2}')
+          test -n "$candidate"
+          test "$candidate" != '(none)'
+          (
+            cd build/klayout-package
+            apt-get --print-uris download "klayout=$candidate" \
+              | tee download-uris.txt
+            apt-get download "klayout=$candidate"
+          )
+          test "$(find build/klayout-package -maxdepth 1 -type f -name 'klayout_*.deb' | wc -l)" -eq 1
+          deb=$(find build/klayout-package -maxdepth 1 -type f -name 'klayout_*.deb' -print -quit)
+          sha256sum "$deb" | tee build/klayout-package/deb.sha256
+          wc -c "$deb" | tee build/klayout-package/deb.bytes
+          sudo apt-get install -y --no-install-recommends "$deb"
+          klayout -v | tee build/klayout-package/klayout-version.txt
+          dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' klayout \
+            | tee build/klayout-package/package.tsv
+          test "$(dpkg-query -W -f='${Version}' klayout)" = "$candidate"
+
+      - name: Publish exact package provenance on the research PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls?state=open&head=metaforismo:research/ihp-klayout-drc-probe-v1")
+          pr_number=$(jq -r '.[0].number // empty' <<<"$pr")
+          test -n "$pr_number"
+          existing=$(gh api "/repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments?per_page=100" \
+            | jq -r --arg sha "$TARGET_SHA" \
+              '.[] | select(.body | contains("HEPHAESTUS_KLAYOUT_PACKAGE_PROVENANCE=" + $sha)) | .id' \
+            | head -n 1)
+          if test -n "$existing"; then
+            echo "Package provenance already published as comment $existing."
+            exit 0
+          fi
+          deb=$(find build/klayout-package -maxdepth 1 -type f -name 'klayout_*.deb' -print -quit)
+          filename=$(basename "$deb")
+          sha=$(cut -d' ' -f1 build/klayout-package/deb.sha256)
+          bytes=$(awk '{print $1}' build/klayout-package/deb.bytes)
+          package=$(cut -f1 build/klayout-package/package.tsv)
+          version=$(cut -f2 build/klayout-package/package.tsv)
+          architecture=$(cut -f3 build/klayout-package/package.tsv)
+          banner=$(tr '\n' ' ' < build/klayout-package/klayout-version.txt | sed 's/[[:space:]]\+/ /g;s/ $//')
+          uri=$(sed -n "s/^'\([^']*\)'.*/\1/p" build/klayout-package/download-uris.txt | head -n 1)
+          test -n "$uri"
+          body=$(cat <<EOF
+          HEPHAESTUS_KLAYOUT_PACKAGE_PROVENANCE=$TARGET_SHA
+
+          ```json
+          {
+            "package": "$package",
+            "version": "$version",
+            "architecture": "$architecture",
+            "deb_filename": "$filename",
+            "deb_sha256": "$sha",
+            "deb_size_bytes": $bytes,
+            "resolved_uri": "$uri",
+            "klayout_banner": "$banner",
+            "runner_image": "ubuntu-24.04"
+          }
+          ```
+          EOF
+          )
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" \
+            -f body="$body"
+
+      - name: Upload package provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-research-klayout-package-provenance
+          path: |
+            build/klayout-package/download-uris.txt
+            build/klayout-package/deb.sha256
+            build/klayout-package/deb.bytes
+            build/klayout-package/klayout-version.txt
+            build/klayout-package/package.tsv
+          if-no-files-found: error
+          retention-days: 30
