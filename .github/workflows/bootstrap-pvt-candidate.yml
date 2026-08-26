@@ -61,12 +61,14 @@ jobs:
           pytest tests/test_pvt_corner.py
           python -m hephaestus.pvt_corner --help
           python scripts/check_repo_hygiene.py
+          find src tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf .pytest_cache
           git diff --check
           test ! -e .github/pvt-candidate-payload
           test ! -e .github/workflows/bootstrap-pvt-candidate.yml
           test -f .github/workflows/pvt-corner-evidence.yml
-          if find src/hephaestus/pvt_corner -type d -name __pycache__ | grep -q .; then
-            echo 'Generated Python caches were materialized.' >&2
+          if find src tests -type d -name __pycache__ | grep -q .; then
+            echo 'Generated Python caches remain after cleanup.' >&2
             exit 1
           fi
 
