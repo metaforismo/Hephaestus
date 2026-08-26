@@ -1,0 +1,138 @@
+name: Cleanup qualified PVT branches
+
+on:
+  push:
+    branches:
+      - chore/cleanup-qualified-pvt-branches
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/cleanup-qualified-pvt-branches
+          fetch-depth: 0
+
+      - name: Verify the qualified main state before deleting refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/42")
+          test "$(jq -r '.merged' <<<"$pr")" = true
+          main=$(gh api "/repos/${GITHUB_REPOSITORY}/branches/main")
+          main_sha=$(jq -r '.commit.sha' <<<"$main")
+          test -n "$main_sha"
+
+          cat > /tmp/required.txt <<'EOF'
+          CI
+          Evidence
+          Formal equivalence
+          Matched baselines
+          Synthesis evidence
+          IHP mapped evidence
+          IHP mapped formal equivalence
+          IHP ABC area-delay evidence
+          IHP ABC area-delay formal equivalence
+          Pinned OpenSTA pre-layout timing evidence
+          Registered matched tiles
+          Pinned IHP OpenROAD physical evidence
+          Repository hygiene
+          Routed SPEF semantic evidence
+          Routed IHP PVT corner evidence
+          Independent routed PVT artifact inspection
+          EOF
+          sed -i 's/^          //' /tmp/required.txt
+
+          for _ in $(seq 1 960); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f head_sha="$main_sha" \
+              -f per_page=100)
+            jq --arg sha "$main_sha" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number, .run_attempt)
+              | group_by(.name)
+              | map(last)
+            ' <<<"$response" > /tmp/latest.json
+            missing=0
+            pending=0
+            failed=0
+            while IFS= read -r name; do
+              row=$(jq -c --arg name "$name" '.[] | select(.name == $name)' \
+                /tmp/latest.json)
+              if test -z "$row"; then
+                missing=$((missing + 1))
+                continue
+              fi
+              status=$(jq -r '.status' <<<"$row")
+              conclusion=$(jq -r '.conclusion // empty' <<<"$row")
+              if test "$status" != completed; then
+                pending=$((pending + 1))
+              elif test "$conclusion" != success; then
+                echo "Main workflow failed: $name ($conclusion)" >&2
+                failed=$((failed + 1))
+              fi
+            done < /tmp/required.txt
+            if test "$failed" -ne 0; then
+              exit 1
+            fi
+            if test "$missing" -eq 0 && test "$pending" -eq 0; then
+              break
+            fi
+            sleep 20
+          done
+          test "$missing" -eq 0
+          test "$pending" -eq 0
+
+          tree=$(gh api "/repos/${GITHUB_REPOSITORY}/git/trees/${main_sha}?recursive=1")
+          for path in \
+            .github/workflows/pvt-reference-materialization.yml \
+            .github/workflows/pvt-inspector-source-materialization.yml \
+            .github/workflows/pvt-path-hardening-materialization.yml \
+            .github/workflows/pvt-documentation-materialization.yml \
+            .github/workflows/pvt-final-hardening-materialization.yml \
+            .github/workflows/pvt-exact-head-authorization.yml
+          do
+            if jq -e --arg path "$path" '.tree[] | select(.path == $path)' \
+              <<<"$tree" >/dev/null; then
+              echo "Temporary workflow remains on main: $path" >&2
+              exit 1
+            fi
+          done
+          jq -e '.tree[] | select(.path == "benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json")' \
+            <<<"$tree" >/dev/null
+
+      - name: Delete only superseded PVT refs
+        run: |
+          set -euo pipefail
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for branch in \
+            research/ihp-pvt-corner-probe \
+            feat/ihp-pvt-corner-evidence \
+            feat/ihp-pvt-corner-evidence-v2 \
+            feat/qualified-ihp-pvt-evidence
+          do
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              git push origin --delete "$branch"
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Delete the transient cleanup branch
+        if: success()
+        run: |
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin --delete chore/cleanup-qualified-pvt-branches
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
