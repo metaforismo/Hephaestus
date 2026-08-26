@@ -1,0 +1,195 @@
+name: Independent routed PVT artifact inspection
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Test the independent artifact inspector
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          ruff format --check \
+            scripts/inspect_pvt_artifact.py \
+            tests/test_inspect_pvt_artifact.py
+          pytest tests/test_inspect_pvt_artifact.py
+          python scripts/inspect_pvt_artifact.py --help
+
+  inspect:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Hephaestus
+        run: python -m pip install -e .
+
+      - name: Locate the successful exact-head PVT workflow
+        id: pvt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 480); do
+            response=$(gh api --method GET \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/pvt-corner-evidence.yml/runs" \
+              -f head_sha="$TARGET_SHA" \
+              -f per_page=20)
+            run_id=$(jq -r --arg sha "$TARGET_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.run_number)
+              | last
+              | .id // empty
+            ' <<<"$response")
+            if test -z "$run_id"; then
+              sleep 30
+              continue
+            fi
+            status=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .status
+            ' <<<"$response")
+            conclusion=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .conclusion // empty
+            ' <<<"$response")
+            html_url=$(jq -r --argjson id "$run_id" '
+              .workflow_runs[] | select(.id == $id) | .html_url
+            ' <<<"$response")
+            if test "$status" = completed; then
+              if test "$conclusion" != success; then
+                echo "Exact-head PVT workflow failed: $conclusion" >&2
+                echo "$html_url" >&2
+                exit 1
+              fi
+              artifacts=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts")
+              names=$(jq -r '.artifacts[] | select(.expired == false) | .name' <<<"$artifacts")
+              artifact_name=$(grep -E '^hephaestus-ihp-pvt-corner-(bootstrap|evidence)$' \
+                <<<"$names" || true)
+              if test "$(wc -l <<<"$artifact_name")" -ne 1 || test -z "$artifact_name"; then
+                echo 'Expected exactly one non-expired PVT evidence artifact.' >&2
+                printf '%s\n' "$names" >&2
+                exit 1
+              fi
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+              echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo 'No successful exact-head PVT workflow completed within the bounded gate.' >&2
+          exit 1
+
+      - name: Download the exact PVT artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PVT_RUN_ID: ${{ steps.pvt.outputs.run_id }}
+          ARTIFACT_NAME: ${{ steps.pvt.outputs.artifact_name }}
+        run: |
+          mkdir -p build/pvt-artifact-inspection/artifact
+          gh run download "$PVT_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir build/pvt-artifact-inspection/artifact
+
+      - name: Determine bootstrap or strict reference mode
+        id: mode
+        env:
+          ARTIFACT_NAME: ${{ steps.pvt.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          reference='benchmarks/reference/ihp_sg13g2_pvt_corner_tiny_v2.json'
+          if test -f "$reference"; then
+            test "$ARTIFACT_NAME" = hephaestus-ihp-pvt-corner-evidence
+            echo 'strict=true' >> "$GITHUB_OUTPUT"
+          else
+            test "$ARTIFACT_NAME" = hephaestus-ihp-pvt-corner-bootstrap
+            echo 'strict=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Replay every report and binding independently
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          STRICT: ${{ steps.mode.outputs.strict }}
+        run: |
+          args=()
+          if test "$STRICT" = true; then
+            args+=(--strict)
+          fi
+          python scripts/inspect_pvt_artifact.py \
+            build/pvt-artifact-inspection/artifact \
+            --expected-source-revision "$TARGET_SHA" \
+            "${args[@]}" \
+            --out build/pvt-artifact-inspection/inspection.json
+
+      - name: Validate the independent inspection boundary
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          STRICT: ${{ steps.mode.outputs.strict }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path('build/pvt-artifact-inspection/inspection.json').read_text(
+                  encoding='utf-8'
+              )
+          )
+          assert report['schema'] == (
+              'hephaestus.pvt-artifact-independent-inspection.v1'
+          )
+          assert report['source_revision'] == os.environ['TARGET_SHA']
+          assert report['strict_reference_mode'] is (os.environ['STRICT'] == 'true')
+          assert report['positive_analyses_replayed'] == 36
+          assert report['negative_controls_replayed'] == 6
+          assert report['source_sha256_bindings_rechecked'] > 0
+          assert report['opensta_diagnostics_observed'] == 0
+          assert report['result'] == 'passed'
+          if report['strict_reference_mode']:
+              assert report['reference_validation']['passed'] is True
+          else:
+              assert report['reference_validation'] is None
+          PY
+
+      - name: Upload the independent inspection report
+        uses: actions/upload-artifact@v4
+        with:
+          name: hephaestus-ihp-pvt-artifact-inspection
+          path: build/pvt-artifact-inspection/inspection.json
+          if-no-files-found: error
+          retention-days: 30
