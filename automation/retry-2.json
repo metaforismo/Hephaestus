@@ -1,0 +1,4 @@
+{
+  "reason": "Finalize on the clean head after removal of the temporary strict-CI trigger.",
+  "pr": 42
+}
