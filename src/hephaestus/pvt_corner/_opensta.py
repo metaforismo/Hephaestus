@@ -10,13 +10,18 @@ from typing import Any
 
 from ._common import PVTCornerError, require_positive_int, sha256_file
 
+_NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
 _SLACK_RE = re.compile(
-    r"^\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+slack\s+"
+    rf"^\s*({_NUMBER})\s+slack\s+"
     r"\((MET|VIOLATED)\)\s*$",
     re.MULTILINE,
 )
+_WORST_SLACK_RE = re.compile(
+    rf"^\s*worst\s+slack\s+max\s+({_NUMBER})\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 _TNS_RE = re.compile(
-    r"^\s*tns\s+(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$",
+    rf"^\s*tns(?:\s+max)?\s+({_NUMBER})\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
 _CLOCK_PERIOD_RE = re.compile(
@@ -35,7 +40,9 @@ def tighten_sdc(text: str, period_ns: float) -> str:
         raise ValueError("tight clock period must be finite and positive")
     matches = list(_CLOCK_PERIOD_RE.finditer(text))
     if len(matches) != 1:
-        raise PVTCornerError("SDC must contain exactly one replaceable create_clock period")
+        raise PVTCornerError(
+            "SDC must contain exactly one replaceable create_clock period"
+        )
     replacement = rf"\g<prefix>{period_ns:.12g}"
     return _CLOCK_PERIOD_RE.sub(replacement, text, count=1)
 
@@ -83,7 +90,57 @@ def emit_opensta_script(
     )
 
 
-def parse_opensta_output(stdout: str, stderr: str, *, expected_label: str) -> dict[str, Any]:
+def _parse_timing_metrics(stdout: str) -> tuple[float, str, float]:
+    """Parse the pinned OpenSTA summaries with a fixture-compatible fallback."""
+
+    worst_matches = _WORST_SLACK_RE.findall(stdout)
+    if len(worst_matches) > 1:
+        raise PVTCornerError("OpenSTA output contains multiple worst-slack summaries")
+
+    check_matches = _SLACK_RE.findall(stdout)
+    if worst_matches:
+        slack = float(worst_matches[0])
+        status = "violated" if slack < 0 else "met"
+        if not check_matches:
+            raise PVTCornerError("OpenSTA output lacks a parseable setup path")
+    else:
+        # The fallback preserves the small executable fixture used by the unit
+        # suite. Real scripts always emit report_worst_slack above.
+        if not check_matches:
+            raise PVTCornerError("OpenSTA output lacks a parseable setup slack")
+        slack_text, raw_status = check_matches[-1]
+        slack = float(slack_text)
+        status = raw_status.lower()
+
+    tns_matches = _TNS_RE.findall(stdout)
+    if len(tns_matches) != 1:
+        raise PVTCornerError(
+            "OpenSTA output must contain exactly one total-negative-slack summary"
+        )
+    tns = float(tns_matches[0])
+    if not math.isfinite(slack) or not math.isfinite(tns):
+        raise PVTCornerError("OpenSTA returned a non-finite timing metric")
+    if (slack < 0 and status != "violated") or (slack >= 0 and status != "met"):
+        raise PVTCornerError("OpenSTA slack sign and status disagree")
+    if tns > 0:
+        raise PVTCornerError("OpenSTA total negative slack cannot be positive")
+    if slack >= 0 and not math.isclose(tns, 0.0, rel_tol=0.0, abs_tol=1e-12):
+        raise PVTCornerError(
+            "OpenSTA reports negative total slack while worst setup slack is met"
+        )
+    if slack < 0 and tns >= 0:
+        raise PVTCornerError(
+            "OpenSTA reports no negative total slack for a violated setup path"
+        )
+    return slack, status, tns
+
+
+def parse_opensta_output(
+    stdout: str,
+    stderr: str,
+    *,
+    expected_label: str,
+) -> dict[str, Any]:
     """Parse a complete raw OpenSTA report and reject partial or fatal output."""
 
     combined = stdout + "\n" + stderr
@@ -98,27 +155,10 @@ def parse_opensta_output(stdout: str, stderr: str, *, expected_label: str) -> di
     if fatal is not None:
         line = combined[fatal.start() :].splitlines()[0]
         raise PVTCornerError(f"OpenSTA reported a fatal diagnostic: {line}")
-    slack_matches = _SLACK_RE.findall(stdout)
-    if not slack_matches:
-        raise PVTCornerError("OpenSTA output lacks a parseable setup slack")
-    slack_text, status = slack_matches[-1]
-    tns_matches = _TNS_RE.findall(stdout)
-    if not tns_matches:
-        raise PVTCornerError("OpenSTA output lacks a parseable total negative slack")
-    slack = float(slack_text)
-    tns = float(tns_matches[-1])
-    if not math.isfinite(slack) or not math.isfinite(tns):
-        raise PVTCornerError("OpenSTA returned a non-finite timing metric")
-    normalized_status = status.lower()
-    if (slack < 0 and normalized_status != "violated") or (
-        slack >= 0 and normalized_status != "met"
-    ):
-        raise PVTCornerError("OpenSTA slack sign and status disagree")
-    if tns > 0:
-        raise PVTCornerError("OpenSTA total negative slack cannot be positive")
+    slack, status, tns = _parse_timing_metrics(stdout)
     return {
         "worst_setup_slack_ns": slack,
-        "slack_status": normalized_status,
+        "slack_status": status,
         "total_negative_slack_ns": tns,
     }
 
@@ -198,7 +238,12 @@ def run_opensta(
     }
 
 
-def replay_run(workdir: Path, record: dict[str, Any], *, expected_label: str) -> dict[str, Any]:
+def replay_run(
+    workdir: Path,
+    record: dict[str, Any],
+    *,
+    expected_label: str,
+) -> dict[str, Any]:
     """Re-read raw output and verify every recorded digest and metric."""
 
     required = (
@@ -210,7 +255,11 @@ def replay_run(workdir: Path, record: dict[str, Any], *, expected_label: str) ->
     paths: dict[str, Path] = {}
     for path_key, digest_key in required:
         value = record.get(path_key)
-        if not isinstance(value, str) or Path(value).is_absolute() or ".." in Path(value).parts:
+        if (
+            not isinstance(value, str)
+            or Path(value).is_absolute()
+            or ".." in Path(value).parts
+        ):
             raise PVTCornerError(f"OpenSTA record path {path_key} is unsafe")
         path = (workdir / value).resolve()
         try:
@@ -231,5 +280,7 @@ def replay_run(workdir: Path, record: dict[str, Any], *, expected_label: str) ->
         expected_label=expected_label,
     )
     if not metrics_equal(metrics, record.get("metrics", {})):
-        raise PVTCornerError("OpenSTA recorded metrics differ from the raw report replay")
+        raise PVTCornerError(
+            "OpenSTA recorded metrics differ from the raw report replay"
+        )
     return metrics
