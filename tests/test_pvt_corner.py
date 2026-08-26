@@ -71,7 +71,7 @@ def _post_claims() -> dict[str, bool]:
 def _run_claims() -> dict[str, bool]:
     return {
         "registered_source_binding_verified": True,
-        "pinned_orfs_image_used": True,
+        "pinned_orfs_imae_used": True,
         "placement_performed": True,
         "routing_performed": True,
         "gds_generated": True,
@@ -105,7 +105,9 @@ def _make_pdk(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     )
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
     liberty: dict[str, object] = {}
     conditions = {
         "slow": (1.08, 125.0),
@@ -137,8 +139,8 @@ set -eu
 label=$(grep -o 'HEPHAESTUS_PVT_CORNER=[a-z0-9_-]*' "$1" | head -n 1 | cut -d= -f2)
 case "$label" in
   slow) slack=0.25; status=MET; tns=0.0 ;;
-  typ) slack=0.5; status=MET; tns=0.0 ;;
-  fast) slack=0.75; status=MET; tns=0.0 ;;
+  typ) slack=0.5; status=MET; tns=0.0 ;
+  fast) slack=0.75; status=MET; tns=0.0 ;
   *) slack=-1.25; status=VIOLATED; tns=-2.5 ;;
 esac
 printf 'HEPHAESTUS_PVT_CORNER=%s\n' "$label"
@@ -217,379 +219,4 @@ def _make_artifacts(tmp_path: Path) -> tuple[Path, Path]:
     post = tmp_path / "post"
     prepared_backends: dict[str, object] = {}
     physical_backends: dict[str, object] = {}
-    post_backends: dict[str, object] = {}
-
-    for backend in BACKENDS:
-        design = physical / "prepared" / "designs" / backend
-        design.mkdir(parents=True, exist_ok=True)
-        sdc = design / "constraint.sdc"
-        sdc.write_text(
-            "create_clock -name core_clock -period 4.0 [get_ports clk]\n",
-            encoding="utf-8",
-        )
-        prepared_backends[backend] = {
-            "wrapper_module": f"top_{backend}",
-            "sdc": f"designs/{backend}/constraint.sdc",
-            "sdc_sha256": _sha(sdc),
-        }
-        runs: list[dict[str, object]] = []
-        post_attempts: list[dict[str, object]] = []
-        for attempt in (1, 2):
-            run_root = physical / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
-            results = run_root / "results"
-            results.mkdir(parents=True, exist_ok=True)
-            netlist = results / "6_final.v"
-            spef = results / "6_final.spef"
-            netlist.write_text(
-                f"module top_{backend}(input clk); endmodule\n",
-                encoding="utf-8",
-            )
-            spef.write_text(f"SPEF {backend} stable\n", encoding="utf-8")
-            manifest = {
-                "schema": "hephaestus.openroad-physical-run.v1",
-                "identity": {
-                    "backend": backend,
-                    "attempt": attempt,
-                    "variant": f"attempt-{attempt:02d}",
-                },
-                "source": {},
-                "artifacts": {
-                    "final_verilog": {
-                        "path": "results/6_final.v",
-                        "sha256": _sha(netlist),
-                        "size_bytes": netlist.stat().st_size,
-                    },
-                    "final_spef": {
-                        "path": "results/6_final.spef",
-                        "sha256": _sha(spef),
-                        "size_bytes": spef.stat().st_size,
-                    },
-                },
-                "normalized": {
-                    "spef_date_normalized_sha256": _sha(spef),
-                },
-                "claims": _run_claims(),
-            }
-            original = run_root / "openroad_run.json"
-            _write_json(original, manifest)
-            digest = _sha(original)
-            relative = f"run_manifests/{backend}-attempt-{attempt:02d}.json"
-            bound = physical / "evidence" / relative
-            bound.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(original, bound)
-            runs.append(
-                {
-                    "attempt": attempt,
-                    "manifest": relative,
-                    "manifest_sha256": digest,
-                    "artifacts": manifest["artifacts"],
-                    "normalized": manifest["normalized"],
-                }
-            )
-            post_attempts.append(
-                {
-                    "attempt": attempt,
-                    "physical_run_manifest": {"sha256": digest},
-                    "routed_verilog": {"sha256": _sha(netlist)},
-                }
-            )
-        physical_backends[backend] = {
-            "repeatability": {"passed": True},
-            "runs": runs,
-        }
-        post_backends[backend] = {
-            "passed": True,
-            "both_physical_attempts_bound": True,
-            "attempts": post_attempts,
-        }
-
-    prepared = physical / "prepared" / "prepared.json"
-    _write_json(
-        prepared,
-        {
-            "schema": "hephaestus.openroad-physical-prepared.v1",
-            "backends": prepared_backends,
-        },
-    )
-    prepared_digest = _sha(prepared)
-    prepared_copy = physical / "evidence" / "source_prepared.json"
-    prepared_copy.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(prepared, prepared_copy)
-
-    physical_manifest = physical / "evidence" / "openroad_physical_evidence.json"
-    _write_json(
-        physical_manifest,
-        {
-            "schema": "hephaestus.openroad-physical-evidence.v1",
-            "evidence_level": "matched_registered_orfs_rtl_to_gds_repeatability",
-            "source": {"prepared_manifest_sha256": prepared_digest},
-            "claims": _physical_claims(),
-            "backends": physical_backends,
-        },
-    )
-    physical_digest = _sha(physical_manifest)
-    post_source = post / "source" / "openroad_physical_evidence.json"
-    post_source.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(physical_manifest, post_source)
-    post_manifest = post / "post_physical_equivalence_evidence.json"
-    _write_json(
-        post_manifest,
-        {
-            "schema": "hephaestus.post-physical-equivalence-evidence.v1",
-            "evidence_level": ("exact_registered_source_to_routed_sequential_equivalence"),
-            "execution": {"source_revision": REVISION},
-            "source": {
-                "physical_evidence_sha256": physical_digest,
-                "prepared_manifest_sha256": prepared_digest,
-            },
-            "claims": _post_claims(),
-            "regression": {"passed": True},
-            "backends": post_backends,
-        },
-    )
-    return physical, post
-
-
-def _fixture(tmp_path: Path) -> dict[str, Path]:
-    pdk, pdk_value = _make_pdk(tmp_path)
-    opensta_commit = "a" * 40
-    executable, tool_manifest = _make_opensta(tmp_path, opensta_commit)
-    contract = _make_contract(tmp_path, pdk_value, opensta_commit)
-    physical, post = _make_artifacts(tmp_path)
-    return {
-        "physical": physical,
-        "post": post,
-        "pdk": pdk,
-        "opensta": executable,
-        "tool_manifest": tool_manifest,
-        "contract": contract,
-    }
-
-
-def test_contract_rejects_an_overstated_signoff_claim(tmp_path: Path) -> None:
-    values = _fixture(tmp_path)
-    contract = json.loads(values["contract"].read_text(encoding="utf-8"))
-    contract["claim_boundary"]["foundry_signoff_complete"] = True
-    _write_json(values["contract"], contract)
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="claim boundary"):
-        pvt_corner.validate_contract(values["contract"])
-
-
-def test_contract_distinguishes_git_sha_from_sha256(tmp_path: Path) -> None:
-    values = _fixture(tmp_path)
-    contract = json.loads(values["contract"].read_text(encoding="utf-8"))
-    contract["ihp_open_pdk"]["commit"] = "f" * 64
-    _write_json(values["contract"], contract)
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="40-character Git SHA"):
-        pvt_corner.validate_contract(values["contract"])
-
-
-def test_tighten_sdc_requires_exactly_one_clock() -> None:
-    assert "-period 0.05" in pvt_corner.tighten_sdc(
-        "create_clock -period 4.0 [get_ports clk]\n",
-        0.05,
-    )
-    with pytest.raises(pvt_corner.PVTCornerError, match="exactly one"):
-        pvt_corner.tighten_sdc(
-            "create_clock -period 4.0 [get_ports a]\ncreate_clock -period 5.0 [get_ports b]\n",
-            0.05,
-        )
-
-
-def test_parse_opensta_output_requires_marker_and_consistent_status() -> None:
-    value = pvt_corner.parse_opensta_output(
-        "HEPHAESTUS_PVT_CORNER=slow\n0.25 slack (MET)\ntns 0.0\nHEPHAESTUS_PVT_DONE=1\n",
-        "",
-        expected_label="slow",
-    )
-    assert value["worst_setup_slack_ns"] == 0.25
-    with pytest.raises(pvt_corner.PVTCornerError, match="sign and status"):
-        pvt_corner.parse_opensta_output(
-            "HEPHAESTUS_PVT_CORNER=slow\n-0.25 slack (MET)\ntns -1.0\nHEPHAESTUS_PVT_DONE=1\n",
-            "",
-            expected_label="slow",
-        )
-
-
-def test_parse_opensta_output_rejects_fatal_diagnostics() -> None:
-    with pytest.raises(pvt_corner.PVTCornerError, match="fatal diagnostic"):
-        pvt_corner.parse_opensta_output(
-            "HEPHAESTUS_PVT_CORNER=typ\n0.5 slack (MET)\ntns 0.0\nHEPHAESTUS_PVT_DONE=1\n",
-            "Error: read_spef failed\n",
-            expected_label="typ",
-        )
-
-
-def test_end_to_end_bootstrap_reference_and_strict_qualification(
-    tmp_path: Path,
-) -> None:
-    values = _fixture(tmp_path)
-    bootstrap_out = tmp_path / "bootstrap"
-    bootstrap = pvt_corner.build_evidence(
-        values["physical"],
-        values["post"],
-        values["pdk"],
-        values["opensta"],
-        values["tool_manifest"],
-        values["contract"],
-        bootstrap_out,
-        source_revision=REVISION,
-        upstream_run_id="123",
-    )
-    assert bootstrap["claims"]["all_36_positive_analyses_completed"] is True
-    assert bootstrap["claims"]["comparative_pvt_claim_enabled"] is False
-    assert bootstrap["regression"]["bootstrap_reference_required"] is True
-    assert (
-        sum(
-            len(case["corners"][corner]["replays"])
-            for backend in bootstrap["backends"].values()
-            for case in backend["physical_attempts"].values()
-            for corner in CORNERS
-        )
-        == 36
-    )
-
-    reference = tmp_path / "reference.json"
-    pvt_corner.build_reference(
-        bootstrap_out / "pvt_corner_evidence.json",
-        reference,
-    )
-    final_out = tmp_path / "final"
-    final = pvt_corner.build_evidence(
-        values["physical"],
-        values["post"],
-        values["pdk"],
-        values["opensta"],
-        values["tool_manifest"],
-        values["contract"],
-        final_out,
-        source_revision=REVISION,
-        reference_path=reference,
-        upstream_run_id="124",
-    )
-    assert final["regression"]["passed"] is True
-    assert final["claims"]["comparative_pvt_claim_enabled"] is True
-    assert final["claims"]["foundry_signoff_sta_performed"] is False
-    assert final["execution"]["upstream_physical_workflow_run_id"] == "124"
-    assert (
-        pvt_corner.validate_existing_reference(
-            final_out / "pvt_corner_evidence.json",
-            reference,
-        )["passed"]
-        is True
-    )
-
-
-def test_reference_rejects_metric_drift(tmp_path: Path) -> None:
-    values = _fixture(tmp_path)
-    output = tmp_path / "bootstrap"
-    pvt_corner.build_evidence(
-        values["physical"],
-        values["post"],
-        values["pdk"],
-        values["opensta"],
-        values["tool_manifest"],
-        values["contract"],
-        output,
-        source_revision=REVISION,
-    )
-    evidence_path = output / "pvt_corner_evidence.json"
-    reference_path = tmp_path / "reference.json"
-    pvt_corner.build_reference(evidence_path, reference_path)
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    evidence["backends"]["shared_dag"]["physical_attempts"]["1"]["corners"]["slow"]["metrics"][
-        "worst_setup_slack_ns"
-    ] = -99.0
-    drifted = tmp_path / "drifted.json"
-    _write_json(drifted, evidence)
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="projection differs"):
-        pvt_corner.validate_existing_reference(drifted, reference_path)
-
-
-def test_builder_rejects_a_symlinked_physical_root(tmp_path: Path) -> None:
-    values = _fixture(tmp_path)
-    link = tmp_path / "physical-link"
-    link.symlink_to(values["physical"].name, target_is_directory=True)
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="symlinks"):
-        pvt_corner.build_evidence(
-            link,
-            values["post"],
-            values["pdk"],
-            values["opensta"],
-            values["tool_manifest"],
-            values["contract"],
-            tmp_path / "out",
-            source_revision=REVISION,
-        )
-
-
-def test_source_chain_rejects_post_physical_manifest_binding_drift(
-    tmp_path: Path,
-) -> None:
-    values = _fixture(tmp_path)
-    post_path = values["post"] / "post_physical_equivalence_evidence.json"
-    post = json.loads(post_path.read_text(encoding="utf-8"))
-    post["backends"]["shared_dag"]["attempts"][0]["physical_run_manifest"]["sha256"] = "0" * 64
-    _write_json(post_path, post)
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="manifest binding differs"):
-        pvt_corner.validate_source_chain(
-            values["physical"],
-            values["post"],
-            values["pdk"],
-            values["opensta"],
-            values["tool_manifest"],
-            values["contract"],
-            source_revision=REVISION,
-        )
-
-
-def test_raw_report_replay_detects_tampering(tmp_path: Path) -> None:
-    executable, _ = _make_opensta(tmp_path, "a" * 40)
-    workdir = tmp_path / "run"
-    record = _opensta.run_opensta(
-        executable=executable,
-        workdir=workdir,
-        script='puts "HEPHAESTUS_PVT_CORNER=slow"\n',
-        label="slow",
-        replay=1,
-        timeout_seconds=30,
-    )
-    (workdir / "stdout.txt").write_text("tampered\n", encoding="utf-8")
-
-    with pytest.raises(pvt_corner.PVTCornerError, match="digest changed"):
-        _opensta.replay_run(workdir, record, expected_label="slow")
-
-
-def test_stable_projection_excludes_run_ids(tmp_path: Path) -> None:
-    values = _fixture(tmp_path)
-    first_out = tmp_path / "first"
-    second_out = tmp_path / "second"
-    first = pvt_corner.build_evidence(
-        values["physical"],
-        values["post"],
-        values["pdk"],
-        values["opensta"],
-        values["tool_manifest"],
-        values["contract"],
-        first_out,
-        source_revision=REVISION,
-        upstream_run_id="111",
-    )
-    second = pvt_corner.build_evidence(
-        values["physical"],
-        values["post"],
-        values["pdk"],
-        values["opensta"],
-        values["tool_manifest"],
-        values["contract"],
-        second_out,
-        source_revision=REVISION,
-        upstream_run_id="222",
-    )
-
-    assert _reference.stable_projection(first) == _reference.stable_projection(second)
+    post_bac²È="25™É½µ}Í¡„ÈÔØ¡ÑµÁ}Á…Ñ èA…Ñ ¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€½¹ÑÉ…Ð€ô©Í½¸¹±½…‘Ì¡Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t¹É•…‘}Ñ•áÐ¡•¹½‘¥¹œô‰ÕÑ˜´àˆ¤¤(€€€½¹ÑÉ…Ñl‰¥¡Á}½Á•¹}Á‘¬‰ul‰½µµ¥Ð‰t€ô€‰˜ˆ€¨€ØÐ(€€€}ÝÉ¥Ñ•}©Í½¸¡Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°½¹ÑÉ…Ð¤((€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ôˆÐÀµ¡…É…Ñ•È¥ÐM!ˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Ù…±¥‘…Ñ•}½¹ÑÉ…Ð¡Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t¤(()‘•˜Ñ•ÍÑ}Ñ¥¡Ñ•¹}Í‘}É•ÅÕ¥É•Í}•á…Ñ±å}½¹•}±½¬ ¤€´ø9½¹”è(€€€…ÍÍ•ÉÐ€ˆµÁ•É¥½€À¸ÀÔˆ¥¸ÁÙÑ}½É¹•È¹Ñ¥¡Ñ•¹}Í‘Œ (€€€€€€€€‰É•…Ñ•}±½¬€µÁ•É¥½€Ð¸Àm•Ñ}Á½ÉÑÌ±­uq¸ˆ°(€€€€€€€€À¸ÀÔ°(€€€€¤(€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰•á…Ñ±ä½¹”ˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Ñ¥¡Ñ•¹}Í‘Œ (€€€€€€€€€€€€‰É•…Ñ•}±½¬€µÁ•É¥½€Ð¸Àm•Ñ}Á½ÉÑÌ…uq¸ˆ(€€€€€€€€€€€€‰É•…Ñ•}±½¬€µÁ•É¥½€Ô¸Àm•Ñ}Á½ÉÑÌ‰uq¸ˆ°(€€€€€€€€€€€€À¸ÀÔ°(€€€€€€€€¤(()‘•˜Ñ•ÍÑ}Á…ÉÍ•}½Á•¹ÍÑ…}½ÕÑÁÕÑ}É•ÅÕ¥É•Í}µ…É­•É}…¹‘}½¹Í¥ÍÑ•¹Ñ}ÍÑ…ÑÕÌ ¤€´ø9½¹”è(€€€Ù…±Õ”€ôÁÙÑ}½É¹•È¹Á…ÉÍ•}½Á•¹ÍÑ…}½ÕÑÁÕÐ (€€€€€€€€‰!A!MQUM}AYQ}=I9HõÍ±½Ýq¸ˆ(€€€€€€€€ˆÀ¸ÈÔÍ±…¬€¡5P¥q¸ˆ(€€€€€€€€‰Ñ¹Ì€À¸Áq¸ˆ(€€€€€€€€‰!A!MQUM}AYQ}=9ôÅq¸ˆ°(€€€€€€€€ˆˆ°(€€€€€€€•áÁ•Ñ•‘}±…‰•°ô‰Í±½Üˆ°(€€€€¤(€€€…ÍÍ•ÉÐÙ…±Õ•l‰Ý½ÉÍÑ}Í•ÑÕÁ}Í±…­}¹Ì‰t€ôô€À¸ÈÔ(€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰Í¥¸…¹ÍÑ…ÑÕÌˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Á…ÉÍ•}½Á•¹ÍÑ…}½ÕÑÁÕÐ (€€€€€€€€€€€€‰!A!MQUM}AYQ}=I9HõÍ±½Ýq¸ˆ(€€€€€€€€€€€€ˆ´À¸ÈÔÍ±…¬€¡5P¥q¸ˆ(€€€€€€€€€€€€‰Ñ¹Ì€´Ä¸Áq¸ˆ(€€€€€€€€€€€€‰!A!MQUM}AYQ}=9ôÅq¸ˆ°(€€€€€€€€€€€€ˆˆ°(€€€€€€€€€€€•áÁ•Ñ•‘}±…‰•°ô‰Í±½Üˆ°(€€€€€€€€¤(()‘•˜Ñ•ÍÑ}Á…ÉÍ•}½Á•¹ÍÑ…}½ÕÑÁÕÑ}É•©•ÑÍ}™…Ñ…±}‘¥…¹½ÍÑ¥Ì ¤€´ø9½¹”è(€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰™…Ñ…°‘¥…¹½ÍÑ¥Œˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Á…ÉÍ•}½Á•¹ÍÑ…}½ÕÑÁÕÐ (€€€€€€€€€€€€‰!A!MQUM}AYQ}=I9HõÑåÁq¸ˆ(€€€€€€€€€€€€ˆÀ¸ÔÍ±…¬€¡5P¥q¸ˆ(€€€€€€€€€€€€‰Ñ¹Ì€À¸Áq¸ˆ(€€€€€€€€€€€€‰!A!MQUM}AYQ}=9ôÅq¸ˆ°(€€€€€€€€€€€€‰ÉÉ½ÈèÉ•…‘}ÍÁ•˜™…¥±•‘q¸ˆ°(€€€€€€€€€€€•áÁ•Ñ•‘}±…‰•°ô‰ÑåÀˆ°(€€€€€€€€¤(()‘•˜Ñ•ÍÑ}•¹‘}Ñ½}•¹‘}‰½½ÑÍÑÉ…Á}É•™•É•¹•}…¹‘}ÍÑÉ¥Ñ}ÅÕ…±¥™¥…Ñ¥½¸ (€€€ÑµÁ}Á…Ñ èA…Ñ °(¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€‰½½ÑÍÑÉ…Á}½ÕÐ€ôÑµÁ}Á…Ñ €¼€‰‰½½ÑÍÑÉ…Àˆ(€€€‰½½ÑÍÑÉ…À€ôÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€‰½½ÑÍÑÉ…Á}½ÕÐ°(€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€ÕÁÍÑÉ•…µ}ÉÕ¹}¥ôˆÄÈÌˆ°(€€€€¤(€€€…ÍÍ•ÉÐ‰½½ÑÍÑÉ…Ál‰±…¥µÌ‰ul‰…±±|ÌÙ}Á½Í¥Ñ¥Ù•}…¹…±åÍ•Í}½µÁ±•Ñ•‰t¥ÌQÉÕ”(€€€…ÍÍ•ÉÐ‰½½ÑÍÑÉ…Ál‰±…¥µÌ‰ul‰½µÁ…É…Ñ¥Ù•}ÁÙÑ}±…¥µ}•¹…‰±•‰t¥Ì…±Í”(€€€…ÍÍ•ÉÐ‰½½ÑÍÑÉ…Ál‰É•É•ÍÍ¥½¸‰ul‰‰½½ÑÍÑÉ…Á}É•™•É•¹•}É•ÅÕ¥É•‰t¥ÌQÉÕ”(€€€…ÍÍ•ÉÐÍÕ´ (€€€€€€€±•¸¡…Í•l‰½É¹•ÉÌ‰um½É¹•Éul‰É•Á±…åÌ‰t¤(€€€€€€€™½È‰…­•¹¥¸‰½½ÑÍÑÉ…Ál‰‰…­•¹‘Ì‰t¹Ù…±Õ•Ì ¤(€€€€€€€™½È…Í”¥¸‰…­•¹‘l‰Á¡åÍ¥…±}…ÑÑ•µÁÑÌ‰t¹Ù…±Õ•Ì ¤(€€€€€€€™½È½É¹•È¥¸=I9IL(€€€€¤€ôô€ÌØ((€€€É•™•É•¹”€ôÑµÁ}Á…Ñ €¼€‰É•™•É•¹”¹©Í½¸ˆ(€€€ÁÙÑ}½É¹•È¹‰Õ¥±‘}É•™•É•¹” (€€€€€€€‰½½ÑÍÑÉ…Á}½ÕÐ€¼€‰ÁÙÑ}½É¹•É}•Ù¥‘•¹”¹©Í½¸ˆ°(€€€€€€€É•™•É•¹”°(€€€€¤(€€€™¥¹…±}½ÕÐ€ôÑµÁ}Á…Ñ €¼€‰™¥¹…°ˆ(€€€™¥¹…°€ôÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€™¥¹…±}½ÕÐ°(€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€É•™•É•¹•}Á…Ñ õÉ•™•É•¹”°(€€€€€€€ÕÁÍÑÉ•…µ}ÉÕ¹}¥ôˆÄÈÐˆ°(€€€€¤(€€€…ÍÍ•ÉÐ™¥¹…±l‰É•É•ÍÍ¥½¸‰ul‰Á…ÍÍ•‰t¥ÌQÉÕ”(€€€…ÍÍ•ÉÐ™¥¹…±l‰±…¥µÌ‰ul‰½µÁ…É…Ñ¥Ù•}ÁÙÑ}±…¥µ}•¹…‰±•‰t¥ÌQÉÕ”(€€€…ÍÍ•ÉÐ™¥¹…±l‰±…¥µÌ‰ul‰™½Õ¹‘Éå}Í¥¹½™™}ÍÑ…}Á•É™½Éµ•‰t¥Ì…±Í”(€€€…ÍÍ•ÉÐ™¥¹…±l‰•á•ÕÑ¥½¸‰ul‰ÕÁÍÑÉ•…µ}Á¡åÍ¥…±}Ý½É­™±½Ý}ÉÕ¹}¥‰t€ôô€ˆÄÈÐˆ(€€€…ÍÍ•ÉÐÁÙÑ}½É¹•È¹Ù…±¥‘…Ñ•}•á¥ÍÑ¥¹}É•™•É•¹” (€€€€€€€™¥¹…±}½ÕÐ€¼€‰ÁÙÑ}½É¹•É}•Ù¥‘•¹”¹©Í½¸ˆ°(€€€€€€€É•™•É•¹”°(€€€€¥l‰Á…ÍÍ•‰t¥ÌQÉÕ”(()‘•˜Ñ•ÍÑ}É•™•É•¹•}É•©•ÑÍ}µ•ÑÉ¥}‘É¥™Ð¡ÑµÁ}Á…Ñ èA…Ñ ¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€½ÕÑÁÕÐ€ôÑµÁ}Á…Ñ €¼€‰‰½½ÑÍÑÉ…Àˆ(€€€ÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€½ÕÑÁÕÐ°(€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€¤(€€€•Ù¥‘•¹•}Á…Ñ €ô½ÕÑÁÕÐ€¼€‰ÁÙÑ}½É¹•É}•Ù¥‘•¹”¹©Í½¸ˆ(€€€É•™•É•¹•}Á…Ñ €ôÑµÁ}Á…Ñ €¼€‰É•™•É•¹”¹©Í½¸ˆ(€€€ÁÙÑ}½É¹•È¹‰Õ¥±‘}É•™•É•¹”¡•Ù¥‘•¹•}Á…Ñ °É•™•É•¹•}Á…Ñ ¤(€€€•Ù¥‘•¹”€ô©Í½¸¹±½…‘Ì¡•Ù¥‘•¹•}Á…Ñ ¹É•…‘}Ñ•áÐ¡•¹½‘¥¹œô‰ÕÑ˜´àˆ¤¤(€€€•Ù¥‘•¹•l‰‰…­•¹‘Ì‰ul‰Í¡…É•‘}‘…œ‰ul‰Á¡åÍ¥…±}…ÑÑ•µÁÑÌ‰ulˆÄ‰ul‰½É¹•ÉÌ‰ul(€€€€€€€€‰Í±½Üˆ(€€€ul‰µ•ÑÉ¥Ì‰ul‰Ý½ÉÍÑ}Í•ÑÕÁ}Í±…­}¹Ì‰t€ô€´ää¸À(€€€‘É¥™Ñ•€ôÑµÁ}Á…Ñ €¼€‰‘É¥™Ñ•¹©Í½¸ˆ(€€€}ÝÉ¥Ñ•}©Í½¸¡‘É¥™Ñ•°•Ù¥‘•¹”¤((€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰ÁÉ½©•Ñ¥½¸‘¥™™•ÉÌˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Ù…±¥‘…Ñ•}•á¥ÍÑ¥¹}É•™•É•¹”¡‘É¥™Ñ•°É•™•É•¹•}Á…Ñ ¤(()‘•˜Ñ•ÍÑ}‰Õ¥±‘•É}É•©•ÑÍ}…}Íåµ±¥¹­•‘}Á¡åÍ¥…±}É½½Ð¡ÑµÁ}Á…Ñ èA…Ñ ¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€±¥¹¬€ôÑµÁ}Á…Ñ €¼€‰Á¡åÍ¥…°µ±¥¹¬ˆ(€€€±¥¹¬¹Íåµ±¥¹­}Ñ¼¡Ù…±Õ•Íl‰Á¡åÍ¥…°‰t¹¹…µ”°Ñ…É•Ñ}¥Í}‘¥É•Ñ½ÉäõQÉÕ”¤((€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰Íåµ±¥¹­Ìˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€€€€€±¥¹¬°(€€€€€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€€€€€ÑµÁ}Á…Ñ €¼€‰½ÕÐˆ°(€€€€€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€€¤(()‘•˜Ñ•ÍÑ}Í½ÕÉ•}¡…¥¹}É•©•ÑÍ}Á½ÍÑ}Á¡åÍ¥…±}µ…¹¥™•ÍÑ}‰¥¹‘¥¹}‘É¥™Ð (€€€ÑµÁ}Á…Ñ èA…Ñ °(¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€Á½ÍÑ}Á…Ñ €ôÙ…±Õ•Íl‰Á½ÍÐ‰t€¼€‰Á½ÍÑ}Á¡åÍ¥…±}•ÅÕ¥Ù…±•¹•}•Ù¥‘•¹”¹©Í½¸ˆ(€€€Á½ÍÐ€ô©Í½¸¹±½…‘Ì¡Á½ÍÑ}Á…Ñ ¹É•…‘}Ñ•áÐ¡•¹½‘¥¹œô‰ÕÑ˜´àˆ¤¤(€€€Á½ÍÑl‰‰…­•¹‘Ì‰ul‰Í¡…É•‘}‘…œ‰ul‰…ÑÑ•µÁÑÌ‰ulÁul‰Á¡åÍ¥…±}ÉÕ¹}µ…¹¥™•ÍÐ‰ul(€€€€€€€€‰Í¡„ÈÔØˆ(€€€t€ô€ˆÀˆ€¨€ØÐ(€€€}ÝÉ¥Ñ•}©Í½¸¡Á½ÍÑ}Á…Ñ °Á½ÍÐ¤((€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰µ…¹¥™•ÍÐ‰¥¹‘¥¹œ‘¥™™•ÉÌˆ¤è(€€€€€€€ÁÙÑ}½É¹•È¹Ù…±¥‘…Ñ•}Í½ÕÉ•}¡…¥¸ (€€€€€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€€¤(()‘•˜Ñ•ÍÑ}É…Ý}É•Á½ÉÑ}É•Á±…å}‘•Ñ•ÑÍ}Ñ…µÁ•É¥¹œ¡ÑµÁ}Á…Ñ èA…Ñ ¤€´ø9½¹”è(€€€•á•ÕÑ…‰±”°|€ô}µ…­•}½Á•¹ÍÑ„¡ÑµÁ}Á…Ñ °€‰„ˆ€¨€ÐÀ¤(€€€Ý½É­‘¥È€ôÑµÁ}Á…Ñ €¼€‰ÉÕ¸ˆ(€€€É•½É€ô}½Á•¹ÍÑ„¹ÉÕ¹}½Á•¹ÍÑ„ (€€€€€€€•á•ÕÑ…‰±”õ•á•ÕÑ…‰±”°(€€€€€€€Ý½É­‘¥ÈõÝ½É­‘¥È°(€€€€€€€ÍÉ¥ÁÐôÁÕÑÌ€‰!A!MQUM}AYQ}=I9HõÍ±½Ü‰q¸œ°(€€€€€€€±…‰•°ô‰Í±½Üˆ°(€€€€€€€É•Á±…äôÄ°(€€€€€€€Ñ¥µ•½ÕÑ}Í•½¹‘ÌôÌÀ°(€€€€¤(€€€€¡Ý½É­‘¥È€¼€‰ÍÑ‘½ÕÐ¹ÑáÐˆ¤¹ÝÉ¥Ñ•}Ñ•áÐ ‰Ñ…µÁ•É•‘q¸ˆ°•¹½‘¥¹œô‰ÕÑ˜´àˆ¤((€€€Ý¥Ñ ÁåÑ•ÍÐ¹É…¥Í•Ì¡ÁÙÑ}½É¹•È¹AYQ½É¹•ÉÉÉ½È°µ…Ñ ô‰‘¥•ÍÐ¡…¹•ˆ¤è(€€€€€€€}½Á•¹ÍÑ„¹É•Á±…å}ÉÕ¸¡Ý½É­‘¥È°É•½É°•áÁ•Ñ•‘}±…‰•°ô‰Í±½Üˆ¤(()‘•˜Ñ•ÍÑ}ÍÑ…‰±•}ÁÉ½©•Ñ¥½¹}•á±Õ‘•Í}ÉÕ¹}¥‘Ì¡ÑµÁ}Á…Ñ èA…Ñ ¤€´ø9½¹”è(€€€Ù…±Õ•Ì€ô}™¥áÑÕÉ”¡ÑµÁ}Á…Ñ ¤(€€€™¥ÉÍÑ}½ÕÐ€ôÑµÁ}Á…Ñ €¼€‰™¥ÉÍÐˆ(€€€Í•½¹‘}½ÕÐ€ôÑµÁ}Á…Ñ €¼€‰Í•½¹ˆ(€€€™¥ÉÍÐ€ôÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€™¥ÉÍÑ}½ÕÐ°(€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€ÕÁÍÑÉ•…µ}ÉÕ¹}¥ôˆÄÄÄˆ°(€€€€¤(€€€Í•½¹€ôÁÙÑ}½É¹•È¹‰Õ¥±‘}•Ù¥‘•¹” (€€€€€€€Ù…±Õ•Íl‰Á¡åÍ¥…°‰t°(€€€€€€€Ù…±Õ•Íl‰Á½ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰Á‘¬‰t°(€€€€€€€Ù…±Õ•Íl‰½Á•¹ÍÑ„‰t°(€€€€€€€Ù…±Õ•Íl‰Ñ½½±}µ…¹¥™•ÍÐ‰t°(€€€€€€€Ù…±Õ•Íl‰½¹ÑÉ…Ð‰t°(€€€€€€€Í•½¹‘}½ÕÐ°(€€€€€€€Í½ÕÉ•}É•Ù¥Í¥½¸õIY%M%=8°(€€€€€€€ÕÁÍÑÉ•…µ}ÉÕ¹}¥ôˆÈÈÈˆ°(€€€€¤((€€€…ÍÍ•ÉÐ}É•™•É•¹”¹ÍÑ…‰±•}ÁÉ½©•Ñ¥½¸¡™¥ÉÍÐ¤€ôô}É•™•É•¹”¹ÍÑ…‰±•}ÁÉ½©•Ñ¥½¸¡Í•½¹¤

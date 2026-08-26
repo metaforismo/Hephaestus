@@ -114,6 +114,13 @@ def validate_contract(path: Path) -> dict[str, Any]:
         "foundry_signoff_complete",
         "silicon_verified",
     )
+    if (
+        not isinstance(claim_boundary, dict)
+        or set(claim_boundary) != set(required_false)
+    ):
+        raise PVTCornerError(
+            "PVT contract claim boundary must contain exactly the supported false claims"
+        )
     require_claims(
         claim_boundary,
         required_true=(),
@@ -258,7 +265,9 @@ def _validate_physical_claims(value: dict[str, Any]) -> None:
 def _validate_post_claims(value: dict[str, Any]) -> None:
     if value.get("schema") != "hephaestus.post-physical-equivalence-evidence.v1":
         raise PVTCornerError("unsupported post-physical evidence schema")
-    if value.get("evidence_level") != ("exact_registered_source_to_routed_sequential_equivalence"):
+    if value.get("evidence_level" != (
+        "exact_registered_source_to_routed_sequential_equivalence"
+    ):
         raise PVTCornerError("unexpected post-physical evidence level")
     require_claims(
         value.get("claims"),
@@ -371,7 +380,7 @@ def validate_source_chain(
         or require_sha256(
             post.get("source", {}).get("prepared_manifest_sha256"),
             context="post-physical prepared manifest",
-        )
+         )
         != prepared_digest
     ):
         raise PVTCornerError("prepared physical manifest binding differs")
@@ -456,7 +465,9 @@ def validate_source_chain(
                 context=f"{backend} attempt {attempt} bound run manifest",
             )
             run_root = (
-                physical_root / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
+                physical_root
+                / "downloaded-runs"
+                / f"openroad-physical-run-{backend}-{attempt}"
             )
             run_root = resolve_input_directory(
                 run_root,
