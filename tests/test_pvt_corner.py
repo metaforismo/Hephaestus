@@ -17,7 +17,10 @@ REVISION = "1" * 40
 
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _sha(path: Path) -> str:
@@ -97,7 +100,11 @@ def _make_pdk(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         path.write_text(f"library({label}) {{}}\n", encoding="utf-8")
         paths[label] = path
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "fixture"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "fixture"],
+        cwd=root,
+        check=True,
+    )
     subprocess.run(
         ["git", "config", "user.email", "fixture@example.invalid"],
         cwd=root,
@@ -105,7 +112,11 @@ def _make_pdk(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     )
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        text=True,
+    ).strip()
     liberty: dict[str, object] = {}
     conditions = {
         "slow": (1.08, 125.0),
@@ -141,9 +152,16 @@ case "$label" in
   fast) slack=0.75; status=MET; tns=0.0 ;;
   *) slack=-1.25; status=VIOLATED; tns=-2.5 ;;
 esac
+printf 'HEPHAESTUS_PVT_REPORT_SCHEMA=2\n'
+printf 'HEPHAESTUS_PVT_CLOCK_COUNT=1\n'
+printf 'HEPHAESTUS_PVT_CHECK_SETUP_OK=1\n'
+printf 'HEPHAESTUS_PVT_PATH_COUNT=1\n'
+printf 'Found 0 unannotated drivers.\n'
+printf 'Found 0 partially unannotated drivers.\n'
 printf 'HEPHAESTUS_PVT_CORNER=%s\n' "$label"
 printf '%s slack (%s)\n' "$slack" "$status"
-printf 'tns %s\n' "$tns"
+printf 'worst slack max %s\n' "$slack"
+printf 'tns max %s\n' "$tns"
 printf 'HEPHAESTUS_PVT_DONE=1\n'
 """,
         encoding="utf-8",
@@ -235,7 +253,11 @@ def _make_artifacts(tmp_path: Path) -> tuple[Path, Path]:
         runs: list[dict[str, object]] = []
         post_attempts: list[dict[str, object]] = []
         for attempt in (1, 2):
-            run_root = physical / "downloaded-runs" / f"openroad-physical-run-{backend}-{attempt}"
+            run_root = (
+                physical
+                / "downloaded-runs"
+                / f"openroad-physical-run-{backend}-{attempt}"
+            )
             results = run_root / "results"
             results.mkdir(parents=True, exist_ok=True)
             netlist = results / "6_final.v"
@@ -336,7 +358,9 @@ def _make_artifacts(tmp_path: Path) -> tuple[Path, Path]:
         post_manifest,
         {
             "schema": "hephaestus.post-physical-equivalence-evidence.v1",
-            "evidence_level": ("exact_registered_source_to_routed_sequential_equivalence"),
+            "evidence_level": (
+                "exact_registered_source_to_routed_sequential_equivalence"
+            ),
             "execution": {"source_revision": REVISION},
             "source": {
                 "physical_evidence_sha256": physical_digest,
@@ -366,6 +390,31 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _valid_report(
+    *,
+    label: str = "slow",
+    slack: str = "0.25",
+    status: str = "MET",
+    tns: str = "0.0",
+) -> str:
+    return "\n".join(
+        [
+            "HEPHAESTUS_PVT_REPORT_SCHEMA=2",
+            "HEPHAESTUS_PVT_CLOCK_COUNT=1",
+            "HEPHAESTUS_PVT_CHECK_SETUP_OK=1",
+            "HEPHAESTUS_PVT_PATH_COUNT=1",
+            "Found 0 unannotated drivers.",
+            "Found 0 partially unannotated drivers.",
+            f"HEPHAESTUS_PVT_CORNER={label}",
+            f"{slack} slack ({status})",
+            f"worst slack max {slack}",
+            f"tns max {tns}",
+            "HEPHAESTUS_PVT_DONE=1",
+            "",
+        ]
+    )
+
+
 def test_contract_rejects_an_overstated_signoff_claim(tmp_path: Path) -> None:
     values = _fixture(tmp_path)
     contract = json.loads(values["contract"].read_text(encoding="utf-8"))
@@ -393,21 +442,30 @@ def test_tighten_sdc_requires_exactly_one_clock() -> None:
     )
     with pytest.raises(pvt_corner.PVTCornerError, match="exactly one"):
         pvt_corner.tighten_sdc(
-            "create_clock -period 4.0 [get_ports a]\ncreate_clock -period 5.0 [get_ports b]\n",
+            "create_clock -period 4.0 [get_ports a]\n"
+            "create_clock -period 5.0 [get_ports b]\n",
             0.05,
         )
 
 
-def test_parse_opensta_output_requires_marker_and_consistent_status() -> None:
+def test_parse_opensta_output_requires_the_complete_report_contract() -> None:
     value = pvt_corner.parse_opensta_output(
-        "HEPHAESTUS_PVT_CORNER=slow\n0.25 slack (MET)\ntns 0.0\nHEPHAESTUS_PVT_DONE=1\n",
+        _valid_report(),
         "",
         expected_label="slow",
     )
     assert value["worst_setup_slack_ns"] == 0.25
-    with pytest.raises(pvt_corner.PVTCornerError, match="sign and status"):
+    assert value["check_setup_passed"] is True
+    assert value["clock_count"] == 1
+    assert value["timing_path_count"] == 1
+    assert value["unannotated_driver_count"] == 0
+
+    with pytest.raises(pvt_corner.PVTCornerError, match="check_setup"):
         pvt_corner.parse_opensta_output(
-            "HEPHAESTUS_PVT_CORNER=slow\n-0.25 slack (MET)\ntns -1.0\nHEPHAESTUS_PVT_DONE=1\n",
+            _valid_report().replace(
+                "HEPHAESTUS_PVT_CHECK_SETUP_OK=1",
+                "HEPHAESTUS_PVT_CHECK_SETUP_OK=0",
+            ),
             "",
             expected_label="slow",
         )
@@ -416,7 +474,7 @@ def test_parse_opensta_output_requires_marker_and_consistent_status() -> None:
 def test_parse_opensta_output_rejects_fatal_diagnostics() -> None:
     with pytest.raises(pvt_corner.PVTCornerError, match="fatal diagnostic"):
         pvt_corner.parse_opensta_output(
-            "HEPHAESTUS_PVT_CORNER=typ\n0.5 slack (MET)\ntns 0.0\nHEPHAESTUS_PVT_DONE=1\n",
+            _valid_report(label="typ", slack="0.5"),
             "Error: read_spef failed\n",
             expected_label="typ",
         )
@@ -499,9 +557,9 @@ def test_reference_rejects_metric_drift(tmp_path: Path) -> None:
     reference_path = tmp_path / "reference.json"
     pvt_corner.build_reference(evidence_path, reference_path)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    evidence["backends"]["shared_dag"]["physical_attempts"]["1"]["corners"]["slow"]["metrics"][
-        "worst_setup_slack_ns"
-    ] = -99.0
+    evidence["backends"]["shared_dag"]["physical_attempts"]["1"]["corners"][
+        "slow"
+    ]["metrics"]["worst_setup_slack_ns"] = -99.0
     drifted = tmp_path / "drifted.json"
     _write_json(drifted, evidence)
 
@@ -533,7 +591,9 @@ def test_source_chain_rejects_post_physical_manifest_binding_drift(
     values = _fixture(tmp_path)
     post_path = values["post"] / "post_physical_equivalence_evidence.json"
     post = json.loads(post_path.read_text(encoding="utf-8"))
-    post["backends"]["shared_dag"]["attempts"][0]["physical_run_manifest"]["sha256"] = "0" * 64
+    post["backends"]["shared_dag"]["attempts"][0]["physical_run_manifest"][
+        "sha256"
+    ] = "0" * 64
     _write_json(post_path, post)
 
     with pytest.raises(pvt_corner.PVTCornerError, match="manifest binding differs"):
