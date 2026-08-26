@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from hephaestus import pvt_corner
@@ -23,6 +25,35 @@ def _report(*, slack: str = "0.25", tns: str = "0.0") -> str:
             "",
         ]
     )
+
+
+def test_emitter_brace_quotes_a_verilog_identifier_with_dollar() -> None:
+    script = pvt_corner.emit_opensta_script(
+        liberty=Path("lib.lib"),
+        netlist=Path("routed.v"),
+        top_module="top$variant",
+        sdc=Path("constraint.sdc"),
+        spef=Path("routed.spef"),
+        corner_label="slow",
+    )
+
+    assert "link_design {top$variant}" in script
+    assert "link_design top$variant" not in script
+
+
+def test_emitter_rejects_a_tcl_command_separator_in_the_module_name() -> None:
+    with pytest.raises(
+        pvt_corner.PVTCornerError,
+        match="safe Verilog identifier",
+    ):
+        pvt_corner.emit_opensta_script(
+            liberty=Path("lib.lib"),
+            netlist=Path("routed.v"),
+            top_module="top;exec",
+            sdc=Path("constraint.sdc"),
+            spef=Path("routed.spef"),
+            corner_label="slow",
+        )
 
 
 def test_parser_accepts_the_pinned_opensta_summary_format() -> None:
