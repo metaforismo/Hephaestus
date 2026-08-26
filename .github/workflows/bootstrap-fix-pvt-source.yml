@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - feat/qualified-ihp-pvt-evidence
+  pull_request:
+    branches:
+      - main
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -14,7 +17,10 @@ permissions:
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.head_ref == 'feat/qualified-ihp-pvt-evidence' ||
+       github.ref == 'refs/heads/feat/qualified-ihp-pvt-evidence')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
